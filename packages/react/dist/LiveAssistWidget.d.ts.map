@@ -1,0 +1,1 @@
+{"version":3,"file":"LiveAssistWidget.d.ts","sourceRoot":"","sources":["../src/LiveAssistWidget.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAmD,MAAM,OAAO,CAAC;AAOxE,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,2BAA2B,CAAC;AAE5D,wBAAgB,gBAAgB,CAAC,EAAE,MAAM,EAAE,KAAK,EAAE,EAAE;IAAE,MAAM,CAAC,EAAE,UAAU,EAAE,CAAC;IAAC,KAAK,CAAC,EAAE,KAAK,CAAC,aAAa,CAAA;CAAE,2CA6FzG"}

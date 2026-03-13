@@ -1,0 +1,48 @@
+# Live Assist ASR Server — ONNX-based ASR with VAD + streaming
+# Models are baked in from MODEL_DIR and LM_DIR (build args).
+#
+# Build from live_assist root:
+#   docker build -f live_assist_js_sdk/docker/Dockerfile.asr \
+#     --build-arg MODEL_DIR=models/asr_onnx_export \
+#     --build-arg LM_DIR=decoder_onnx/model/kenlm \
+#     -t whissleasr/live-assist-asr .
+
+FROM python:3.11-slim
+
+ARG MODEL_DIR=models/asr_onnx_export
+ARG LM_DIR=decoder_onnx/model/kenlm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libsndfile1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps (kenlm requires C++ compilation)
+COPY decoder_onnx/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy ASR source
+COPY decoder_onnx/src/ ./src/
+
+# Copy ONNX model and KenLM (paths relative to build context = live_assist root)
+COPY ${MODEL_DIR}/ ./model/
+RUN mkdir -p ./model/kenlm
+COPY ${LM_DIR}/ ./model/kenlm/
+
+ENV ASR_MODEL_DIR=/app/model \
+    ASR_LM_DIR=/app/model/kenlm \
+    ASR_DEVICE=cpu \
+    ASR_SILENCE_PADDING=0.3 \
+    ASR_DEFAULT_LANGUAGE=en \
+    ASR_BEAM_WIDTH=100 \
+    ASR_PORT=8001
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8001/ || exit 1
+
+CMD ["python", "-m", "src.server", "--host", "0.0.0.0", "--port", "8001"]

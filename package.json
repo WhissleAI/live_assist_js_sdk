@@ -1,0 +1,10 @@
+{
+  "name": "@whissle/live-assist-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspaces --if-present"
+  }
+}

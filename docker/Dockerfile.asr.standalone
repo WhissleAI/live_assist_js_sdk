@@ -1,0 +1,35 @@
+# Live Assist ASR Server — used with pre-prepared build context from build-docker.sh
+# Build context: temp dir with src/, requirements.txt, model/ (and model/kenlm/)
+
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libsndfile1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps (kenlm requires C++ compilation)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy ASR source and model (prepared by build script)
+COPY src/ ./src/
+COPY model/ ./model/
+
+ENV ASR_MODEL_DIR=/app/model \
+    ASR_LM_DIR=/app/model/kenlm \
+    ASR_DEVICE=cpu \
+    ASR_SILENCE_PADDING=0.3 \
+    ASR_DEFAULT_LANGUAGE=en \
+    ASR_BEAM_WIDTH=100 \
+    ASR_PORT=8001
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8001/ || exit 1
+
+CMD ["python", "-m", "src.server", "--host", "0.0.0.0", "--port", "8001"]

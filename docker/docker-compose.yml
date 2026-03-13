@@ -1,0 +1,34 @@
+# Run from live_assist root:
+#   1. Build first: ./live_assist_js_sdk/scripts/build-docker.sh
+#   2. Then: docker compose -f live_assist_js_sdk/docker/docker-compose.yml up -d
+#
+# Or use pre-built images from Docker Hub.
+
+services:
+  asr:
+    image: whissleasr/live-assist-asr:latest
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  sdk:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sdk
+    ports:
+      - "8765:8765"
+    environment:
+      - ASR_URL=ws://asr:8001/asr/stream
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DB_PATH=/app/data/live_assist.db
+      - SESSIONS_DIR=/app/data/sessions
+    volumes:
+      - sdk-data:/app/data
+    depends_on:
+      - asr
+    restart: unless-stopped
+
+volumes:
+  sdk-data:

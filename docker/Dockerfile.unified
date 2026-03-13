@@ -1,0 +1,51 @@
+# Live Assist Unified — ASR (with models) + Agent in a single container
+# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API)
+#
+# Build: from live_assist root:
+#   docker build -f live_assist_js_sdk/docker/Dockerfile.unified -t whissleasr/live-assist:latest .
+
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    supervisor curl build-essential cmake libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ── ASR server (decoder_onnx) ──
+COPY decoder_onnx/requirements.txt /app/asr/requirements.txt
+RUN pip install --no-cache-dir -r /app/asr/requirements.txt
+COPY decoder_onnx/src /app/asr/src
+
+# ── ASR models (baked in) ──
+COPY models/asr_onnx_export /app/asr/model
+# KenLM language model — improves beam search (from decoder_onnx/model/kenlm)
+COPY decoder_onnx/model/kenlm /app/asr/model/kenlm
+
+# ── Agent server (Live Assist SDK) ──
+COPY live_assist_js_sdk/packages/server/requirements.txt /app/server/requirements.txt
+RUN pip install --no-cache-dir -r /app/server/requirements.txt
+COPY live_assist_js_sdk/packages/server /app/server
+
+# ── Static assets (AudioWorklet) ──
+COPY live_assist_js_sdk/public /app/public
+
+RUN mkdir -p /app/data
+
+# ── Supervisor ──
+COPY live_assist_js_sdk/docker/supervisord.conf /etc/supervisor/conf.d/unified.conf
+
+ENV ASR_MODEL_DIR=/app/asr/model \
+    ASR_LM_DIR=/app/asr/model/kenlm \
+    ASR_DEVICE=cpu \
+    ASR_PORT=8001 \
+    ASR_SILENCE_PADDING=0.3 \
+    ASR_DEFAULT_LANGUAGE=en \
+    ASR_BEAM_WIDTH=100
+
+EXPOSE 8001 8765
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:8001/ && curl -f http://localhost:8765/health || exit 1
+
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/unified.conf"]

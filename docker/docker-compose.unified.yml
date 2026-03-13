@@ -1,0 +1,32 @@
+# Live Assist — Single container (ASR + Agent)
+# Use this to pull from Docker Hub and run. Only GEMINI_API_KEY or ANTHROPIC_API_KEY needed.
+#
+# Usage:
+#   export GEMINI_API_KEY=your_key
+#   docker compose -f docker/docker-compose.unified.yml up -d
+
+services:
+  live-assist:
+    image: whissleasr/live-assist:latest
+    container_name: live-assist
+    ports:
+      - "8001:8001"
+      - "8765:8765"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DB_PATH=/app/data/live_assist.db
+      - SESSIONS_DIR=/app/data/sessions
+    volumes:
+      - live-assist-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/ && curl -f http://localhost:8765/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+volumes:
+  live-assist-data:

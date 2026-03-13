@@ -1,0 +1,40 @@
+# Live Assist SDK — Frontend (serves static files) + Python Agent
+# Exposes: 3001 (frontend), 8765 (agent API)
+
+# ── Stage 1: Build frontend ──
+FROM node:20-alpine AS frontend-build
+WORKDIR /app
+COPY package.json tsconfig.base.json ./
+COPY packages/core/ packages/core/
+COPY packages/react/ packages/react/
+COPY public/ public/
+RUN npm install && npm run build --workspaces
+
+# ── Stage 2: Python agent ──
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    supervisor curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps
+COPY packages/server/requirements.txt /app/server/requirements.txt
+RUN pip install --no-cache-dir -r /app/server/requirements.txt
+
+# Copy server code
+COPY packages/server/ /app/server/
+
+# Copy built frontend + AudioWorklet
+COPY --from=frontend-build /app/public/ /app/public/
+
+# Create data directory
+RUN mkdir -p /app/data
+
+# Supervisor config
+RUN echo '[supervisord]\nnodaemon=true\nlogfile=/dev/stdout\nlogfile_maxbytes=0\n\n[program:agent]\ncommand=uvicorn app.main:app --host 0.0.0.0 --port 8765\ndirectory=/app/server\nautorestart=true\nstdout_logfile=/dev/stdout\nstdout_logfile_maxbytes=0\nstderr_logfile=/dev/stderr\nstderr_logfile_maxbytes=0\n' > /etc/supervisor/conf.d/sdk.conf
+
+EXPOSE 8765
+
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/sdk.conf"]
