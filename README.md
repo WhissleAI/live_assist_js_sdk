@@ -12,13 +12,15 @@ export GEMINI_API_KEY=your_key_here
 curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash
 ```
 
-Or one-liner:
+One-liners:
 
 ```bash
+# Gemini
 GEMINI_API_KEY=your_key bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
-```
 
-For Claude: `ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic` (same pattern).
+# Claude
+ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
+```
 
 **Option B: Docker Compose**
 
