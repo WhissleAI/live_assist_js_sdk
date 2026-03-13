@@ -7,26 +7,25 @@ Real-time conversation intelligence — transcription, behavioral profiling, age
 **Option A: Install script** (recommended)
 
 ```bash
-# Replace with your repo URL when published
-curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist/main/live_assist_js_sdk/install.sh | bash
+# With API key (use export so it passes to the script)
+export GEMINI_API_KEY=your_key_here
+curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash
 ```
 
-Or with your API key:
+Or one-liner:
 
 ```bash
-GEMINI_API_KEY=your_key curl -fsSL .../install.sh | bash
-# or for Claude:
-ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic curl -fsSL .../install.sh | bash
+GEMINI_API_KEY=your_key bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
 ```
+
+For Claude: `ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic` (same pattern).
 
 **Option B: Docker Compose**
 
 ```bash
-# Clone the repo (or just download docker-compose.unified.yml)
-git clone https://github.com/WhissleAI/live_assist.git
-cd live_assist/live_assist_js_sdk
+git clone https://github.com/WhissleAI/live_assist_js_sdk.git
+cd live_assist_js_sdk
 
-# Set your API key and run
 export GEMINI_API_KEY=your_key_here
 docker compose -f docker/docker-compose.unified.yml up -d
 ```
@@ -48,6 +47,21 @@ docker run -d --name live-assist \
 | 8765 | Agent API (feedback, sessions, health) |
 
 First start takes ~2 minutes while ASR loads models. Check logs: `docker logs -f live-assist`.
+
+### Run the example app
+
+Once Docker is running:
+
+```bash
+git clone https://github.com/WhissleAI/live_assist_js_sdk.git
+cd live_assist_js_sdk/examples/react-app
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 and click **Start Session**.
+
+> **Troubleshooting:** If you see `ERR_MODULE_NOT_FOUND` for Vite, run `rm -rf node_modules package-lock.json && npm install` and try again.
 
 ---
 
@@ -79,9 +93,7 @@ Browser ──WebSocket PCM──► ASR Server (8001)
 
 ## Integration
 
-### 1. React
-
-### 2. React integration
+### React
 
 ```bash
 npm install @whissle/live-assist-core @whissle/live-assist-react
@@ -108,7 +120,7 @@ function App() {
 }
 ```
 
-### 3. Vanilla JS integration
+### Vanilla JS
 
 ```js
 import { createLiveAssistSession } from '@whissle/live-assist-core';
@@ -136,7 +148,7 @@ await session.start({ includeTab: true });
 const report = await session.stop();
 ```
 
-### 4. iframe embed
+### iframe embed
 
 ```html
 <iframe

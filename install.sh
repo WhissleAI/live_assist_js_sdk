@@ -6,9 +6,10 @@
 # You only need to provide your Gemini or Claude API key.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
-#   GEMINI_API_KEY=your_key curl -fsSL .../install.sh | bash
-#   ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic curl -fsSL .../install.sh | bash
+#   export GEMINI_API_KEY=your_key
+#   curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash
+#
+# Or one-liner: GEMINI_API_KEY=your_key bash -c 'curl -fsSL .../install.sh | bash'
 # =============================================================================
 
 set -euo pipefail
