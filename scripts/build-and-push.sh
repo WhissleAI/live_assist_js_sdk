@@ -2,7 +2,7 @@
 # =============================================================================
 # Build and push Live Assist unified images to Docker Hub
 #
-# Builds three images in parallel:
+# Builds three images sequentially:
 #   whissleasr/live-assist:latest-amd64  — CPU (Intel/AMD Mac, Linux servers)
 #   whissleasr/live-assist:latest-arm64  — CPU (Apple Silicon Mac, ARM Linux)
 #   whissleasr/live-assist:latest-gpu    — GPU (NVIDIA CUDA, amd64)
@@ -17,7 +17,9 @@
 #
 # Usage (from live_assist repo root):
 #   ./live_assist_js_sdk/scripts/build-and-push.sh
-#   ./live_assist_js_sdk/scripts/build-and-push.sh --no-push   # build only
+#   ./live_assist_js_sdk/scripts/build-and-push.sh --no-push      # build only
+#   ./live_assist_js_sdk/scripts/build-and-push.sh --gpu-only      # build GPU only
+#   ./live_assist_js_sdk/scripts/build-and-push.sh --amd64-only   # build amd64 + manifest (arm64 already pushed)
 # =============================================================================
 
 set -euo pipefail
@@ -27,9 +29,15 @@ SDK_DIR="$(dirname "$SCRIPT_DIR")"
 LIVE_ASSIST_ROOT="$(cd "$SDK_DIR/.." && pwd)"
 
 PUSH=true
-if [[ "${1:-}" == "--no-push" ]]; then
-  PUSH=false
-fi
+GPU_ONLY=false
+AMD64_ONLY=false
+for arg in "$@"; do
+  case "$arg" in
+    --no-push)    PUSH=false ;;
+    --gpu-only)   GPU_ONLY=true ;;
+    --amd64-only) AMD64_ONLY=true ;;
+  esac
+done
 
 cd "$LIVE_ASSIST_ROOT"
 
@@ -73,7 +81,7 @@ echo "✅ Docker ready"
 echo ""
 
 echo "=============================================="
-echo "  Live Assist — Build & Push (parallel)"
+echo "  Live Assist — Build & Push (sequential)"
 echo "=============================================="
 echo "  cpu-amd64  → whissleasr/live-assist:latest-amd64"
 echo "  cpu-arm64  → whissleasr/live-assist:latest-arm64"
@@ -115,9 +123,15 @@ IGNORE
 DOCKERFILE_CPU="$BUILD_DIR/live_assist_js_sdk/docker/Dockerfile.unified"
 DOCKERFILE_GPU="$BUILD_DIR/live_assist_js_sdk/docker/Dockerfile.unified.gpu"
 
-# ── Build all three in parallel ──
+# ── Build all three sequentially (or single target) ──
 echo ""
-echo ">>> Building cpu-amd64, cpu-arm64, gpu in parallel..."
+if [ "$GPU_ONLY" = true ]; then
+  echo ">>> Building gpu only..."
+elif [ "$AMD64_ONLY" = true ]; then
+  echo ">>> Building cpu-amd64 only (+ manifest for auto-select)..."
+else
+  echo ">>> Building cpu-amd64, cpu-arm64, gpu (one by one)..."
+fi
 echo ""
 
 build_cpu_amd64() {
@@ -151,6 +165,8 @@ build_cpu_arm64() {
 }
 
 build_gpu() {
+  # GPU image is amd64-only (NVIDIA CUDA). Always use --platform linux/amd64
+  # to avoid building arm64 variant (sbsa/ubuntu-ports) which has GPG/apt issues.
   if [ "$PUSH" = true ]; then
     docker buildx build --platform linux/amd64 \
       -f "$DOCKERFILE_GPU" \
@@ -158,25 +174,28 @@ build_gpu() {
       --push \
       "$BUILD_DIR"
   else
-    docker build -f "$DOCKERFILE_GPU" -t whissleasr/live-assist:latest-gpu "$BUILD_DIR"
+    docker buildx build --platform linux/amd64 \
+      -f "$DOCKERFILE_GPU" \
+      -t whissleasr/live-assist:latest-gpu \
+      --load \
+      "$BUILD_DIR"
   fi
   echo "[gpu] done"
 }
 
-# Run in parallel
-build_cpu_amd64 &
-PID_AMD=$!
-build_cpu_arm64 &
-PID_ARM=$!
-build_gpu &
-PID_GPU=$!
-
-wait $PID_AMD || exit 1
-wait $PID_ARM || exit 1
-wait $PID_GPU || exit 1
+# Run sequentially (or single target)
+if [ "$GPU_ONLY" = true ]; then
+  build_gpu
+elif [ "$AMD64_ONLY" = true ]; then
+  build_cpu_amd64
+else
+  build_cpu_amd64
+  build_cpu_arm64
+  build_gpu
+fi
 
 # ── Create latest manifest (amd64 + arm64) for auto-selection ──
-if [ "$PUSH" = true ]; then
+if [ "$PUSH" = true ] && [ "$GPU_ONLY" = false ]; then
   echo ""
   echo ">>> Creating latest manifest (amd64 + arm64)..."
   docker manifest rm whissleasr/live-assist:latest 2>/dev/null || true

@@ -23,8 +23,10 @@ COPY models/asr_onnx_export /app/asr/model
 COPY decoder_onnx/model/kenlm /app/asr/model/kenlm
 
 # ── Agent server (Live Assist SDK) ──
+# Install torch CPU-first so sentence-transformers doesn't pull CUDA deps (avoids ARM/CPU build failures)
 COPY live_assist_js_sdk/packages/server/requirements.txt /app/server/requirements.txt
-RUN pip install --no-cache-dir -r /app/server/requirements.txt
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r /app/server/requirements.txt
 COPY live_assist_js_sdk/packages/server /app/server
 
 # ── Static assets (AudioWorklet) ──
