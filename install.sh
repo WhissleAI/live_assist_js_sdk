@@ -3,7 +3,8 @@
 # Live Assist — One-command installer
 #
 # Pulls the pre-built Docker image (ASR + models + agent) and runs it.
-# You only need to provide your Gemini or Claude API key.
+# Detects platform (amd64/arm64/GPU) and pulls the right image.
+# Installs live-assist CLI for bash usage.
 #
 # Usage:
 #   export GEMINI_API_KEY=your_key
@@ -15,7 +16,6 @@
 set -euo pipefail
 
 INSTALL_DIR="${LIVE_ASSIST_DIR:-$HOME/live-assist}"
-IMAGE="${LIVE_ASSIST_IMAGE:-whissleasr/live-assist:latest}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,6 +28,22 @@ info()  { echo -e "${CYAN}[live-assist]${NC} $*"; }
 ok()    { echo -e "${GREEN}[live-assist]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[live-assist]${NC} $*"; }
 fail()  { echo -e "${RED}[live-assist]${NC} $*"; exit 1; }
+
+# ---- Platform detection ----
+detect_image() {
+  local arch
+  case "$(uname -m)" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) arch="amd64" ;;
+  esac
+
+  if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    echo "whissleasr/live-assist:latest-gpu"
+  else
+    echo "whissleasr/live-assist:latest-${arch}"
+  fi
+}
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
@@ -72,6 +88,11 @@ if [ -z "$GEMINI_KEY" ] && [ -z "$CLAUDE_KEY" ]; then
   fi
 fi
 
+# ---- Detect image ----
+
+IMAGE=$(detect_image)
+info "Detected platform: $IMAGE"
+
 # ---- Create install dir ----
 
 mkdir -p "$INSTALL_DIR"
@@ -91,19 +112,19 @@ ok "Configuration saved to $INSTALL_DIR/.env"
 # ---- Compose file ----
 
 COMPOSE_FILE="docker-compose.yml"
-cat > "$COMPOSE_FILE" << 'COMPOSE'
+cat > "$COMPOSE_FILE" << COMPOSE
 services:
   live-assist:
-    image: whissleasr/live-assist:latest
+    image: ${IMAGE}
     container_name: live-assist
     ports:
       - "8001:8001"
       - "8765:8765"
     env_file: .env
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_PROVIDER=\${LLM_PROVIDER:-gemini}
+      - GEMINI_API_KEY=\${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY:-}
       - DB_PATH=/app/data/live_assist.db
       - SESSIONS_DIR=/app/data/sessions
     volumes:
@@ -120,9 +141,45 @@ volumes:
   live-assist-data:
 COMPOSE
 
+# ---- Install CLI ----
+
+BIN_DIR="$INSTALL_DIR/bin"
+mkdir -p "$BIN_DIR"
+
+# Get CLI: from local repo (when run as ./install.sh) or fetch from GitHub
+CLI_SRC=""
+if [[ "${BASH_SOURCE[0]:-$0}" == /* ]] && [[ -f "${BASH_SOURCE[0]:-$0}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -f "$SCRIPT_DIR/bin/live-assist" ] && CLI_SRC="$SCRIPT_DIR/bin/live-assist"
+fi
+if [ -n "$CLI_SRC" ]; then
+  cp "$CLI_SRC" "$BIN_DIR/live-assist"
+elif command -v curl >/dev/null 2>&1; then
+  curl -sfL "https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/bin/live-assist" -o "$BIN_DIR/live-assist" 2>/dev/null || true
+fi
+
+if [ -f "$BIN_DIR/live-assist" ]; then
+  chmod +x "$BIN_DIR/live-assist"
+  # Add to PATH if not already
+  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "" >> "$HOME/.bashrc" 2>/dev/null || true
+    echo "# Live Assist CLI" >> "$HOME/.bashrc" 2>/dev/null || true
+    echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$HOME/.bashrc" 2>/dev/null || true
+    if [ -f "$HOME/.zshrc" ] && [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+      echo "" >> "$HOME/.zshrc" 2>/dev/null || true
+      echo "# Live Assist CLI" >> "$HOME/.zshrc" 2>/dev/null || true
+      echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$HOME/.zshrc" 2>/dev/null || true
+    fi
+    ok "CLI installed to $BIN_DIR (added to PATH in .bashrc/.zshrc)"
+  else
+    ok "CLI installed to $BIN_DIR"
+  fi
+  info "Run: live-assist help"
+fi
+
 # ---- Pull and start ----
 
-info "Pulling Live Assist image (ASR + models + agent)..."
+info "Pulling Live Assist image ($IMAGE)..."
 docker compose -f "$COMPOSE_FILE" pull
 
 info "Starting Live Assist..."
@@ -136,12 +193,11 @@ echo -e "${GREEN}${BOLD}║                                                     
 echo -e "${GREEN}${BOLD}║  ASR:   ${NC}ws://localhost:8001/asr/stream${NC}"
 echo -e "${GREEN}${BOLD}║  Agent: ${NC}http://localhost:8765${NC}"
 echo -e "${GREEN}${BOLD}║                                                          ║${NC}"
-echo -e "${GREEN}${BOLD}║  Health: ${NC}curl http://localhost:8001/ && curl http://localhost:8765/health${NC}"
-echo -e "${GREEN}${BOLD}║  Logs:   ${NC}docker logs -f live-assist${NC}"
-echo -e "${GREEN}${BOLD}║  Stop:   ${NC}cd $INSTALL_DIR && docker compose down${NC}"
-echo -e "${GREEN}${BOLD}║                                                          ║${NC}"
+echo -e "${GREEN}${BOLD}║  CLI:   ${NC}live-assist start|stop|status|feedback|agents${NC}"
+echo -e "${GREEN}${BOLD}║  Logs:  ${NC}docker logs -f live-assist${NC}"
+echo -e "${GREEN}${BOLD}║  Stop:  ${NC}cd $INSTALL_DIR && docker compose down${NC}"
 echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 info "First start may take ~2 minutes while ASR loads models."
-info "Integrate in your app: asrUrl: 'ws://localhost:8001/asr/stream', agentUrl: 'http://localhost:8765'"
+info "Get feedback from bash: echo \"Meeting notes...\" | live-assist feedback"
 echo ""

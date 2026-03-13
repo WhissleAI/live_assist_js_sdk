@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tgz
+
+# Never commit API keys or secrets
+.env
+.env.*
+docker/.env
+**/.env
+**/.env.*

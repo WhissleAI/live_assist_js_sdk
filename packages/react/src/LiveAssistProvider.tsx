@@ -20,7 +20,7 @@ interface LiveAssistContextValue {
   instructions: string;
   setInstructions: (s: string) => void;
   error: string | null;
-  startCapture: (opts?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; recordAudio?: boolean }) => Promise<void>;
+  startCapture: (opts?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; agentId?: string; mode?: string; recordAudio?: boolean }) => Promise<void>;
   stopCapture: () => Promise<SessionReport>;
 }
 
@@ -77,7 +77,7 @@ export function LiveAssistProvider({ config, children }: { config: LiveAssistCon
     };
   }, [config]);
 
-  const startCapture = useCallback(async (opts?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; recordAudio?: boolean }) => {
+  const startCapture = useCallback(async (opts?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; agentId?: string; mode?: string; recordAudio?: boolean }) => {
     const s = sessionRef.current;
     if (!s) return;
     setError(null);

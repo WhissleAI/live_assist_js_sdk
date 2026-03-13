@@ -22,8 +22,10 @@ class ProcessStreamRequest(BaseModel):
     user_timezone: str = "UTC"
     documents_payload: List[Dict[str, Any]] = Field(default_factory=list)
     custom_prompt: Optional[str] = None
+    agent_id: Optional[str] = None
     agenda_items: Optional[List[AgendaItemModel]] = None
     emotion_profile: Optional[Dict[str, float]] = None
+    intent_signals: Optional[Dict[str, Dict[str, float]]] = None  # { user: {intent: prob}, other: {...} }
     voice_profile_summary: Optional[str] = None
     entities: Optional[List[Dict[str, str]]] = None
 

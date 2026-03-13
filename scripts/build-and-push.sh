@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Build and push Live Assist unified image to Docker Hub
+# Build and push Live Assist unified images to Docker Hub
+#
+# Builds three images in parallel:
+#   whissleasr/live-assist:latest-amd64  — CPU (Intel/AMD Mac, Linux servers)
+#   whissleasr/live-assist:latest-arm64  — CPU (Apple Silicon Mac, ARM Linux)
+#   whissleasr/live-assist:latest-gpu    — GPU (NVIDIA CUDA, amd64)
+#
+# Then creates manifest:
+#   whissleasr/live-assist:latest  — auto-selects amd64 or arm64 by platform
 #
 # Prerequisites:
 #   - ASR models at models/asr_onnx_export/ (model.onnx, config.json, etc.)
 #   - docker login (for push)
+#   - buildx (for arm64 cross-build on amd64 host): docker buildx create --use
 #
 # Usage (from live_assist repo root):
 #   ./live_assist_js_sdk/scripts/build-and-push.sh
@@ -64,13 +73,30 @@ echo "✅ Docker ready"
 echo ""
 
 echo "=============================================="
-echo "  Live Assist — Build & Push"
+echo "  Live Assist — Build & Push (parallel)"
 echo "=============================================="
-echo "  Image: whissleasr/live-assist:latest"
+echo "  cpu-amd64  → whissleasr/live-assist:latest-amd64"
+echo "  cpu-arm64  → whissleasr/live-assist:latest-arm64"
+echo "  gpu        → whissleasr/live-assist:latest-gpu"
+echo "  manifest   → whissleasr/live-assist:latest (amd64 + arm64)"
 echo "=============================================="
 echo ""
 
-# Prepare build context (root .dockerignore excludes decoder_onnx/models)
+# Ensure buildx for arm64 cross-build (needed on amd64 host)
+if [ "$PUSH" = true ]; then
+  BUILDX_DRIVER=$(docker buildx inspect 2>/dev/null | grep "Driver:" | awk '{print $2}')
+  if [[ "$BUILDX_DRIVER" == "docker" ]]; then
+    echo "Creating buildx builder for arm64 cross-build..."
+    if docker buildx inspect live-assist-builder >/dev/null 2>&1; then
+      docker buildx use live-assist-builder
+    else
+      docker buildx create --use --name live-assist-builder
+    fi
+    echo ""
+  fi
+fi
+
+# Prepare build context
 BUILD_DIR=$(mktemp -d)
 trap "rm -rf $BUILD_DIR" EXIT
 
@@ -78,9 +104,7 @@ echo "Preparing build context..."
 cp -r decoder_onnx "$BUILD_DIR/"
 mkdir -p "$BUILD_DIR/models" "$BUILD_DIR/decoder_onnx/model/kenlm"
 cp -r models/asr_onnx_export "$BUILD_DIR/models/"
-# KenLM is included via decoder_onnx copy above; mkdir ensures path exists if not present
 cp -r live_assist_js_sdk "$BUILD_DIR/"
-# Minimal .dockerignore for this build
 cat > "$BUILD_DIR/.dockerignore" << 'IGNORE'
 **/node_modules
 **/__pycache__
@@ -88,18 +112,95 @@ cat > "$BUILD_DIR/.dockerignore" << 'IGNORE'
 **/dist
 IGNORE
 
-docker build -f "$BUILD_DIR/live_assist_js_sdk/docker/Dockerfile.unified" \
-  -t whissleasr/live-assist:latest \
-  "$BUILD_DIR"
+DOCKERFILE_CPU="$BUILD_DIR/live_assist_js_sdk/docker/Dockerfile.unified"
+DOCKERFILE_GPU="$BUILD_DIR/live_assist_js_sdk/docker/Dockerfile.unified.gpu"
+
+# ── Build all three in parallel ──
+echo ""
+echo ">>> Building cpu-amd64, cpu-arm64, gpu in parallel..."
+echo ""
+
+build_cpu_amd64() {
+  if [ "$PUSH" = true ]; then
+    docker buildx build --platform linux/amd64 \
+      -f "$DOCKERFILE_CPU" \
+      -t whissleasr/live-assist:latest-amd64 \
+      --push \
+      "$BUILD_DIR"
+  else
+    docker build -f "$DOCKERFILE_CPU" -t whissleasr/live-assist:latest-amd64 "$BUILD_DIR"
+  fi
+  echo "[cpu-amd64] done"
+}
+
+build_cpu_arm64() {
+  if [ "$PUSH" = true ]; then
+    docker buildx build --platform linux/arm64 \
+      -f "$DOCKERFILE_CPU" \
+      -t whissleasr/live-assist:latest-arm64 \
+      --push \
+      "$BUILD_DIR"
+  else
+    docker buildx build --platform linux/arm64 \
+      -f "$DOCKERFILE_CPU" \
+      -t whissleasr/live-assist:latest-arm64 \
+      --load \
+      "$BUILD_DIR" 2>/dev/null || echo "[cpu-arm64] Skipped (need buildx for arm64)"
+  fi
+  echo "[cpu-arm64] done"
+}
+
+build_gpu() {
+  if [ "$PUSH" = true ]; then
+    docker buildx build --platform linux/amd64 \
+      -f "$DOCKERFILE_GPU" \
+      -t whissleasr/live-assist:latest-gpu \
+      --push \
+      "$BUILD_DIR"
+  else
+    docker build -f "$DOCKERFILE_GPU" -t whissleasr/live-assist:latest-gpu "$BUILD_DIR"
+  fi
+  echo "[gpu] done"
+}
+
+# Run in parallel
+build_cpu_amd64 &
+PID_AMD=$!
+build_cpu_arm64 &
+PID_ARM=$!
+build_gpu &
+PID_GPU=$!
+
+wait $PID_AMD || exit 1
+wait $PID_ARM || exit 1
+wait $PID_GPU || exit 1
+
+# ── Create latest manifest (amd64 + arm64) for auto-selection ──
+if [ "$PUSH" = true ]; then
+  echo ""
+  echo ">>> Creating latest manifest (amd64 + arm64)..."
+  docker manifest rm whissleasr/live-assist:latest 2>/dev/null || true
+  docker manifest create whissleasr/live-assist:latest \
+    whissleasr/live-assist:latest-amd64 \
+    whissleasr/live-assist:latest-arm64
+  docker manifest push whissleasr/live-assist:latest
+  echo "[manifest] latest created"
+fi
 
 if [ "$PUSH" = true ]; then
   echo ""
-  echo "Pushing to Docker Hub..."
-  docker push whissleasr/live-assist:latest
-  echo ""
   echo "✅ Done. Users can run:"
+  echo "   # CPU (auto-selects amd64/arm64):"
   echo "   docker pull whissleasr/live-assist:latest"
   echo "   docker run -d -p 8001:8001 -p 8765:8765 -e GEMINI_API_KEY=xxx whissleasr/live-assist:latest"
+  echo ""
+  echo "   # Or pull specific arch:"
+  echo "   docker pull whissleasr/live-assist:latest-amd64   # Intel Mac, Linux x86"
+  echo "   docker pull whissleasr/live-assist:latest-arm64   # Apple Silicon, ARM Linux"
+  echo ""
+  echo "   # GPU (faster ASR):"
+  echo "   docker pull whissleasr/live-assist:latest-gpu"
+  echo "   docker run -d --gpus all -p 8001:8001 -p 8765:8765 -e GEMINI_API_KEY=xxx whissleasr/live-assist:latest-gpu"
 else
   echo ""
   echo "✅ Build complete (skipped push). Run without --no-push to push."

@@ -31,6 +31,7 @@ class LiveAssistContext:
     documents_payload: List[Dict] = field(default_factory=list)
     custom_prompt: Optional[str] = None
     emotion_profile: Optional[Dict[str, float]] = None
+    intent_signals: Optional[Dict[str, Dict[str, float]]] = None  # { user: {intent: prob}, other: {...} }
     voice_profile_summary: Optional[str] = None
     entities: List[Dict[str, str]] = field(default_factory=list)
     agenda_items: Optional[List[Dict[str, Any]]] = None
@@ -145,6 +146,15 @@ async def generate_feedback_node(state: LiveAssistState) -> AsyncGenerator[Dict[
 
     memory_context = "\n".join([f"- {m.title}: {m.detail}" for m in memories[:5]]) if memories else ""
     personality_ctx = f"\nUser Personality: {context.user_personality}" if context.user_personality else ""
+    intent_ctx = ""
+    if context.intent_signals:
+        parts = []
+        for ch, probs in context.intent_signals.items():
+            if probs:
+                top = sorted(probs.items(), key=lambda x: -x[1])[:3]
+                parts.append(f"{ch}: " + ", ".join(f"{k}({min(1, max(0, v)):.0%})" for k, v in top))
+        if parts:
+            intent_ctx = "\nIntent signals (use to refine agenda confidence): " + "; ".join(parts)
     instruction = (context.custom_prompt or "You are a live-assist companion providing real-time conversation feedback. Be concise and actionable.").strip()
 
     agenda_instruction = ""
@@ -175,7 +185,7 @@ Transcript: {state['transcript']}
 Mode: {context.mode}
 Engagement: {status.engagement_score}/10
 Sentiment: {status.sentiment_trend}
-{personality_ctx}
+{personality_ctx}{intent_ctx}
 
 Relevant Memories:
 {memory_context or "(none)"}
@@ -192,7 +202,7 @@ Transcript: {state['transcript']}
 Mode: {context.mode}
 Engagement: {status.engagement_score}/10
 Sentiment: {status.sentiment_trend}
-{personality_ctx}
+{personality_ctx}{intent_ctx}
 
 Relevant Memories:
 {memory_context or "(none)"}

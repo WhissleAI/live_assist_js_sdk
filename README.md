@@ -6,6 +6,8 @@ Real-time conversation intelligence — transcription, behavioral profiling, age
 
 **Option A: Install script** (recommended)
 
+Detects your platform (Mac Intel/Apple Silicon, Linux amd64/arm64, GPU) and pulls the right image. Installs `live-assist` CLI for bash.
+
 ```bash
 # With API key (use export so it passes to the script)
 export GEMINI_API_KEY=your_key_here
@@ -20,6 +22,17 @@ GEMINI_API_KEY=your_key bash -c 'curl -fsSL https://raw.githubusercontent.com/Wh
 
 # Claude
 ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
+```
+
+**Bash CLI** (after install):
+
+```bash
+live-assist start              # Start Docker
+live-assist status             # Check health
+live-assist agents             # List smart agents
+live-assist feedback "We agreed to send the deck by Friday"
+echo "Meeting notes..." | live-assist feedback --agent commitment_tracker
+live-assist stop               # Stop Docker
 ```
 
 **Option B: Docker Compose**
@@ -39,6 +52,15 @@ docker run -d --name live-assist \
   -p 8001:8001 -p 8765:8765 \
   -e GEMINI_API_KEY=your_key_here \
   whissleasr/live-assist:latest
+```
+
+**GPU variant** (faster ASR, requires NVIDIA GPU + `nvidia-container-toolkit`):
+
+```bash
+docker run -d --name live-assist --gpus all \
+  -p 8001:8001 -p 8765:8765 \
+  -e GEMINI_API_KEY=your_key_here \
+  whissleasr/live-assist:latest-gpu
 ```
 
 ### What you get
@@ -62,6 +84,14 @@ npm run dev
 ```
 
 Open http://localhost:5173 and click **Start Session**.
+
+**Smart Agents example** — choose an agent (Commitment Tracker, Discovery Coach, etc.) for tailored feedback:
+
+```bash
+cd live_assist_js_sdk/examples/react-app-smart-agents
+npm install
+npm run dev
+```
 
 > **Troubleshooting:** If you see `ERR_MODULE_NOT_FOUND` for Vite, run `rm -rf node_modules package-lock.json && npm install` and try again.
 
@@ -277,25 +307,29 @@ uvicorn app.main:app --reload --port 8765
 
 ## Building & Pushing (Maintainers)
 
-To build the unified image from source (requires ASR models at `models/asr_onnx_export/`):
+Builds three images in parallel, then creates a `latest` manifest:
 
 ```bash
 # From live_assist repo root
-cd /path/to/live_assist
-docker compose -f live_assist_js_sdk/docker/docker-compose.build.yml build
-```
-
-To push to Docker Hub:
-
-```bash
-docker tag whissleasr/live-assist:latest whissleasr/live-assist:latest
-docker push whissleasr/live-assist:latest
-```
-
-Or use the build script:
-
-```bash
 ./live_assist_js_sdk/scripts/build-and-push.sh
+```
+
+Images:
+- `whissleasr/live-assist:latest-amd64` — CPU (Intel Mac, Linux x86)
+- `whissleasr/live-assist:latest-arm64` — CPU (Apple Silicon, ARM Linux)
+- `whissleasr/live-assist:latest-gpu` — GPU (NVIDIA CUDA)
+- `whissleasr/live-assist:latest` — manifest (auto-selects amd64 or arm64)
+
+Use `--no-push` to build locally without pushing:
+
+```bash
+./live_assist_js_sdk/scripts/build-and-push.sh --no-push
+```
+
+Alternatively, build with Docker Compose (CPU only):
+
+```bash
+docker compose -f live_assist_js_sdk/docker/docker-compose.build.yml build
 ```
 
 ## Directory Structure
@@ -306,8 +340,8 @@ live_assist_js_sdk/
 │   ├── core/            # Headless JS library
 │   ├── react/           # React UI components
 │   └── server/          # Python FastAPI agent
-├── docker/              # Docker images
-├── examples/            # Integration demos
+├── docker/              # Docker images (Dockerfile.unified, Dockerfile.unified.gpu)
+├── examples/            # react-app, react-app-smart-agents
 ├── public/              # AudioWorklet
 ├── package.json         # Workspace root
 └── tsconfig.base.json

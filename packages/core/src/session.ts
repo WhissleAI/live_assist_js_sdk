@@ -45,6 +45,8 @@ export class LiveAssistSession {
   private agenda: AgendaItem[] = [];
   private documents: AttachedDoc[] = [];
   private _instructions = "";
+  private _agentId: string | undefined;
+  private _mode = "meeting";
   private lastDone: LiveAssistDone | null = null;
   private segIdCounterMic = 0;
   private segIdCounterTab = 0;
@@ -76,12 +78,14 @@ export class LiveAssistSession {
   get transcript() { return [...this.transcriptEntries]; }
   get profiles() { return this.profileManager.getProfiles(); }
 
-  async start(options?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; recordAudio?: boolean }): Promise<void> {
+  async start(options?: { includeTab?: boolean; agenda?: AgendaItem[]; documents?: AttachedDoc[]; instructions?: string; agentId?: string; mode?: string; recordAudio?: boolean }): Promise<void> {
     if (this._running) return;
     this._running = true;
     this.agenda = options?.agenda ?? [];
     this.documents = options?.documents ?? [];
     this._instructions = options?.instructions ?? "";
+    this._agentId = options?.agentId ?? this.config.agentId;
+    this._mode = options?.mode ?? "meeting";
     this.transcriptEntries = [];
     this.segIdCounterMic = 0;
     this.segIdCounterTab = 0;
@@ -321,14 +325,22 @@ export class LiveAssistSession {
     if (!transcriptText.trim()) return;
 
     console.log("[LiveAssist] Sending feedback request, transcript length:", transcriptText.length, "agenda items:", this.agenda.length);
-    const { user } = this.profileManager.getProfiles();
+    const { user, other } = this.profileManager.getProfiles();
+    const intentSignals =
+      Object.keys(user.intentProfile).length > 0 || Object.keys(other.intentProfile).length > 0
+        ? { user: user.intentProfile, other: other.intentProfile }
+        : undefined;
+
     await streamLiveAssistWithFeedback({
       agentUrl: this.config.agentUrl,
       transcript: transcriptText,
       userId: this.deviceId,
+      mode: this._mode,
+      agentId: this._agentId,
       custom_prompt: this._instructions.trim() || undefined,
       agenda_items: this.agenda.length > 0 ? this.agenda.map((a) => ({ id: a.id, title: a.title, status: a.status, confidence: a.confidence })) : undefined,
       emotion_profile: user.emotionProfile,
+      intent_signals: intentSignals,
       documents_payload: this.documents.filter((d) => d.useForContext !== false).map((d) => ({ id: d.id, name: d.name, content: d.content })),
       callbacks: {
         onFeedbackChunk: (chunk) => this.emit("feedback", { summary: chunk, suggestions: [] }),

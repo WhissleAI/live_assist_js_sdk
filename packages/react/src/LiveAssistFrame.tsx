@@ -11,10 +11,14 @@ const SIDEBAR_WIDTH = 140;
 /** Embeddable frame: [You chart | controls + transcript | Other chart] — wide layout. */
 export function LiveAssistFrame({
   agenda,
+  agentId,
+  mode,
   style,
   className,
 }: {
   agenda?: AgendaItem[];
+  agentId?: string;
+  mode?: string;
   style?: React.CSSProperties;
   className?: string;
 }) {
@@ -34,9 +38,9 @@ export function LiveAssistFrame({
 
   const handleStart = useCallback(
     (opts?: { includeTab?: boolean; agenda?: AgendaItem[]; instructions?: string }) => {
-      startCapture({ ...opts, agenda: opts?.agenda ?? agenda });
+      startCapture({ ...opts, agenda: opts?.agenda ?? agenda, agentId, mode });
     },
-    [startCapture, agenda]
+    [startCapture, agenda, agentId, mode]
   );
 
   const handleStop = useCallback(() => stopCapture(), [stopCapture]);

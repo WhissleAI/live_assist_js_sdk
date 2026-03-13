@@ -9,11 +9,17 @@ export interface LiveAssistDocumentPayload {
   content: string;
 }
 
+export interface IntentSignals {
+  user?: Record<string, number>;
+  other?: Record<string, number>;
+}
+
 export async function streamLiveAssistWithFeedback(params: {
   agentUrl: string;
   transcript: string;
   userId: string;
   mode?: string;
+  agentId?: string;
   userPersonality?: string;
   userTimezone?: string;
   voiceProfileSummary?: string;
@@ -22,17 +28,19 @@ export async function streamLiveAssistWithFeedback(params: {
   custom_prompt?: string;
   agenda_items?: Array<{ id: string; title: string; status?: string; confidence?: number }>;
   emotion_profile?: Record<string, number>;
+  intent_signals?: IntentSignals;
   entities?: Array<{ type: string; value: string }>;
   callbacks: LiveAssistCallbacks;
   signal?: AbortSignal;
 }): Promise<void> {
   const {
     agentUrl, transcript, userId,
-    mode = "sales_call", userPersonality = "", userTimezone = "UTC",
+    mode = "meeting", agentId,
+    userPersonality = "", userTimezone = "UTC",
     voiceProfileSummary = "",
     contextFilters = { docs: false, memories: true, notes: true, history: true, emails: false },
     documents_payload = [], custom_prompt, agenda_items,
-    emotion_profile, entities, callbacks, signal,
+    emotion_profile, intent_signals, entities, callbacks, signal,
   } = params;
 
   const body: Record<string, unknown> = {
@@ -40,8 +48,10 @@ export async function streamLiveAssistWithFeedback(params: {
     context_filters: contextFilters, user_personality: userPersonality,
     user_location: "", user_timezone: userTimezone, documents_payload,
     ...(custom_prompt?.trim() ? { custom_prompt: custom_prompt.trim() } : {}),
+    ...(agentId ? { agent_id: agentId } : {}),
     ...(agenda_items?.length ? { agenda_items } : {}),
     ...(emotion_profile != null ? { emotion_profile } : {}),
+    ...(intent_signals && (intent_signals.user || intent_signals.other) ? { intent_signals } : {}),
     ...(voiceProfileSummary ? { voice_profile_summary: voiceProfileSummary } : {}),
     ...(entities?.length ? { entities } : {}),
   };

@@ -1,0 +1,73 @@
+# Live Assist Unified (GPU) — ASR (with models, CUDA) + Agent in a single container
+# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API)
+#
+# Uses NVIDIA CUDA base for GPU-accelerated ASR inference (4–8x faster than CPU).
+# Run with: docker run --gpus all -p 8001:8001 -p 8765:8765 ...
+#
+# Build: from live_assist root:
+#   docker build -f live_assist_js_sdk/docker/Dockerfile.unified.gpu -t whissleasr/live-assist:latest-gpu .
+
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3.10-venv \
+    python3.10-dev \
+    supervisor \
+    curl \
+    build-essential \
+    cmake \
+    libsndfile1 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ── ASR server (decoder_onnx) with onnxruntime-gpu ──
+COPY decoder_onnx/requirements.txt /app/asr/requirements.txt
+RUN pip install --no-cache-dir -r /app/asr/requirements.txt \
+    && pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir onnxruntime-gpu
+COPY decoder_onnx/src /app/asr/src
+
+# ── ASR models (baked in) ──
+COPY models/asr_onnx_export /app/asr/model
+# KenLM language model — improves beam search (from decoder_onnx/model/kenlm)
+COPY decoder_onnx/model/kenlm /app/asr/model/kenlm
+
+# ── Agent server (Live Assist SDK) ──
+COPY live_assist_js_sdk/packages/server/requirements.txt /app/server/requirements.txt
+RUN pip install --no-cache-dir -r /app/server/requirements.txt
+COPY live_assist_js_sdk/packages/server /app/server
+
+# ── Static assets (AudioWorklet) ──
+COPY live_assist_js_sdk/public /app/public
+
+RUN mkdir -p /app/data
+
+# ── Supervisor ──
+COPY live_assist_js_sdk/docker/supervisord.conf /etc/supervisor/conf.d/unified.conf
+
+ENV ASR_MODEL_DIR=/app/asr/model \
+    ASR_LM_DIR=/app/asr/model/kenlm \
+    ASR_DEVICE=cuda \
+    ASR_PORT=8001 \
+    ASR_SILENCE_PADDING=0.3 \
+    ASR_DEFAULT_LANGUAGE=en \
+    ASR_BEAM_WIDTH=100 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+EXPOSE 8001 8765
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:8001/ && curl -f http://localhost:8765/health || exit 1
+
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/unified.conf"]

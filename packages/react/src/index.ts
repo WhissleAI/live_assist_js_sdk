@@ -1,4 +1,5 @@
 export { LiveAssistProvider, useLiveAssist } from "./LiveAssistProvider";
+export { useAgents, type Agent } from "./useAgents";
 export { LiveAssistWidget } from "./LiveAssistWidget";
 export { LiveAssistFrame } from "./LiveAssistFrame";
 export { TranscriptView } from "./TranscriptView";

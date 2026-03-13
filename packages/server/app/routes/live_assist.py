@@ -11,12 +11,26 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from ..models import ProcessStreamRequest, SessionStartRequest, SessionEndRequest
 from ..live_assist_graph import LiveAssistWorkflow, LiveAssistContext
 from ..vector_memory import get_vector_memory
+from ..agents import get_agent_registry
 from ..config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/live-assist")
 
 workflow = LiveAssistWorkflow()
+
+
+@router.get("/agents")
+async def list_agents():
+    """List available smart agents."""
+    registry = get_agent_registry()
+    agents = registry.list_agents()
+    return {
+        "agents": [
+            {"id": a.id, "name": a.name, "description": a.description, "mode": a.mode}
+            for a in agents
+        ]
+    }
 
 
 @router.post("/process/stream")
@@ -29,15 +43,29 @@ async def process_stream(req: ProcessStreamRequest, request: Request):
     if req.agenda_items:
         agenda_items = [{"id": a.id, "title": a.title, "status": a.status, "confidence": a.confidence} for a in req.agenda_items]
 
+    # Resolve agent: agent_id overrides custom_prompt and mode unless user provides custom_prompt
+    custom_prompt = req.custom_prompt
+    mode = req.mode
+    if req.agent_id:
+        registry = get_agent_registry()
+        agent = registry.get(req.agent_id)
+        if agent:
+            if not custom_prompt:
+                custom_prompt = agent.system_prompt
+            mode = agent.mode
+
+    intent_signals = req.intent_signals
+
     context = LiveAssistContext(
         user_id=req.user_id,
-        mode=req.mode,
+        mode=mode,
         context_filters=req.context_filters,
         user_personality=req.user_personality or None,
         user_timezone=req.user_timezone,
         documents_payload=[d for d in req.documents_payload] if req.documents_payload else [],
-        custom_prompt=req.custom_prompt,
+        custom_prompt=custom_prompt,
         emotion_profile=req.emotion_profile,
+        intent_signals=intent_signals,
         voice_profile_summary=req.voice_profile_summary or None,
         entities=[e for e in req.entities] if req.entities else [],
         agenda_items=agenda_items,
