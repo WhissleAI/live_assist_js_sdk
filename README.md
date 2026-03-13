@@ -4,25 +4,31 @@ Real-time conversation intelligence — transcription, behavioral profiling, age
 
 ## Quick Start (Docker)
 
+### One-liner (share with customers)
+
+**Install (auto-detects platform, installs CLI):**
+```bash
+GEMINI_API_KEY=your_key bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
+```
+
+**Or run Docker directly (CPU, auto-selects amd64/arm64):**
+```bash
+docker run -d --name live-assist -p 8001:8001 -p 8765:8765 -e GEMINI_API_KEY=your_key whissleasr/live-assist:latest
+```
+
+**GPU (NVIDIA, faster ASR):**
+```bash
+docker run -d --name live-assist --gpus all -p 8001:8001 -p 8765:8765 -e GEMINI_API_KEY=your_key whissleasr/live-assist:latest-gpu
+```
+
 **Option A: Install script** (recommended)
 
-Detects your platform (Mac Intel/Apple Silicon, Linux amd64/arm64, GPU) and pulls the right image. Installs `live-assist` CLI for bash.
-
 ```bash
-# With API key (use export so it passes to the script)
 export GEMINI_API_KEY=your_key_here
 curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash
 ```
 
-One-liners:
-
-```bash
-# Gemini
-GEMINI_API_KEY=your_key bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
-
-# Claude
-ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic bash -c 'curl -fsSL https://raw.githubusercontent.com/WhissleAI/live_assist_js_sdk/main/install.sh | bash'
-```
+With Claude: `ANTHROPIC_API_KEY=your_key LLM_PROVIDER=anthropic bash -c 'curl -fsSL ... | bash'`
 
 **Bash CLI** (after install):
 
@@ -307,10 +313,10 @@ uvicorn app.main:app --reload --port 8765
 
 ## Building & Pushing (Maintainers)
 
-Builds three images in parallel, then creates a `latest` manifest:
+Builds four images sequentially, then creates a `latest` manifest for auto-select:
 
 ```bash
-# From live_assist repo root
+# From live_assist repo root — builds all four
 ./live_assist_js_sdk/scripts/build-and-push.sh
 ```
 
@@ -320,10 +326,12 @@ Images:
 - `whissleasr/live-assist:latest-gpu` — GPU (NVIDIA CUDA)
 - `whissleasr/live-assist:latest` — manifest (auto-selects amd64 or arm64)
 
-Use `--no-push` to build locally without pushing:
+Options:
 
 ```bash
-./live_assist_js_sdk/scripts/build-and-push.sh --no-push
+./live_assist_js_sdk/scripts/build-and-push.sh --no-push      # build only, no push
+./live_assist_js_sdk/scripts/build-and-push.sh --gpu-only      # build GPU only
+./live_assist_js_sdk/scripts/build-and-push.sh --amd64-only    # build amd64 + manifest (when arm64 already pushed)
 ```
 
 Alternatively, build with Docker Compose (CPU only):
