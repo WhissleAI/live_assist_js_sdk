@@ -62,7 +62,11 @@ export class AsrStreamClient {
 
       ws.onopen = () => {
         if (this.connectTimeout) { clearTimeout(this.connectTimeout); this.connectTimeout = null; }
-        if (settled) return;
+        if (settled || this.intentionalClose) {
+          try { ws.close(); } catch {}
+          if (!settled) { settled = true; resolve(); }
+          return;
+        }
         settled = true;
         this.state = "open";
         this.ws = ws;
@@ -86,6 +90,9 @@ export class AsrStreamClient {
               is_final: msg.is_final !== false,
               metadata: msg.metadata as StreamTranscriptSegment["metadata"],
               metadata_probs: msg.metadata_probs as StreamTranscriptSegment["metadata_probs"],
+              metadata_probs_timeline: Array.isArray(msg.metadata_probs_timeline)
+                ? msg.metadata_probs_timeline as StreamTranscriptSegment["metadata_probs_timeline"]
+                : undefined,
               entities: msg.entities as StreamTranscriptSegment["entities"],
               speakerChange: (msg.speakerChange as boolean) ?? false,
               speakerEmbedding: Array.isArray(msg.speakerEmbedding) ? msg.speakerEmbedding as number[] : undefined,
@@ -105,7 +112,9 @@ export class AsrStreamClient {
           } else if (msg.type === "error") {
             this.onError?.(new Error((msg.message as string) ?? "ASR stream error"));
           }
-        } catch {}
+        } catch (e) {
+          console.warn("[LiveAssist] ASR message parse error:", e);
+        }
       };
 
       ws.onerror = () => {

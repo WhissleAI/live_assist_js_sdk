@@ -20,6 +20,8 @@ interface LiveAssistContextValue {
         agenda?: AgendaItem[];
         documents?: AttachedDoc[];
         instructions?: string;
+        agentId?: string;
+        mode?: string;
         recordAudio?: boolean;
     }) => Promise<void>;
     stopCapture: () => Promise<SessionReport>;

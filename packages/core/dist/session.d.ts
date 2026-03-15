@@ -46,6 +46,8 @@ export declare class LiveAssistSession {
     private agenda;
     private documents;
     private _instructions;
+    private _agentId;
+    private _mode;
     private lastDone;
     private segIdCounterMic;
     private segIdCounterTab;
@@ -67,6 +69,8 @@ export declare class LiveAssistSession {
         agenda?: AgendaItem[];
         documents?: AttachedDoc[];
         instructions?: string;
+        agentId?: string;
+        mode?: string;
         recordAudio?: boolean;
     }): Promise<void>;
     stop(): Promise<SessionReport>;

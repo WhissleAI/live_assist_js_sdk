@@ -28,6 +28,18 @@ type Listener<K extends keyof EventMap> = (data: EventMap[K]) => void;
 
 const FEEDBACK_INTERVAL_MS = 5_000;
 
+function deriveEmotion(seg: StreamTranscriptSegment): { emotion: string | null; confidence?: number } {
+  const probs = seg.metadata_probs?.emotion;
+  if (probs?.length) {
+    const top = probs.reduce((a, b) => (a.probability > b.probability ? a : b));
+    return {
+      emotion: top?.token?.toUpperCase().replace(/^EMOTION_/, "") ?? null,
+      confidence: top?.probability,
+    };
+  }
+  return { emotion: seg.metadata?.emotion?.toUpperCase().replace(/^EMOTION_/, "") ?? null };
+}
+
 export class LiveAssistSession {
   private config: LiveAssistConfig;
   private deviceId: string;
@@ -71,7 +83,11 @@ export class LiveAssistSession {
   }
 
   private emit<K extends keyof EventMap>(event: K, data: EventMap[K]) {
-    this.listeners.get(event)?.forEach((cb) => { try { (cb as Listener<K>)(data); } catch {} });
+    this.listeners.get(event)?.forEach((cb) => {
+      try { (cb as Listener<K>)(data); } catch (e) {
+        console.warn(`[LiveAssist] listener error on "${String(event)}":`, e);
+      }
+    });
   }
 
   get isRunning() { return this._running; }
@@ -117,6 +133,11 @@ export class LiveAssistSession {
       this.tabAsr.onError = (err) => this.emit("error", err);
       await this.tabAsr.connect();
       this.tabCapture = new TabCapture((pcm) => this.tabAsr?.sendPcm(pcm), workletUrl);
+      this.tabCapture.onStopped = () => {
+        console.warn("[LiveAssist] Tab sharing ended by user");
+        this.tabAsr?.end().catch(() => []);
+        this.tabCapture = null;
+      };
       const tabErr = await this.tabCapture.start();
       if (tabErr && tabErr !== "cancelled") this.emit("error", new Error(tabErr));
     }
@@ -132,7 +153,9 @@ export class LiveAssistSession {
           const data = (await res.json()) as { session_id?: string };
           this.sessionId = data.session_id ?? null;
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[LiveAssist] session/start failed:", e);
+      }
     }
 
     this.feedbackTimer = setInterval(() => this.runFeedback(), FEEDBACK_INTERVAL_MS);
@@ -165,7 +188,13 @@ export class LiveAssistSession {
 
     const timestamp = Date.now();
     const id = this.sessionId ?? `session_${timestamp}_${Math.random().toString(36).slice(2, 10)}`;
-    const transcript = this.transcriptEntries.map((e) => ({ channel: e.channel, text: e.text, is_final: e.is_final }));
+    const transcript = this.transcriptEntries.map((e) => ({
+      channel: e.channel,
+      text: e.text,
+      is_final: e.is_final,
+      audioOffset: e.audioOffset,
+      metadata: e.metadata,
+    }));
     const stored: import("./sessionStore").StoredSession = {
       id,
       timestamp,
@@ -186,7 +215,9 @@ export class LiveAssistSession {
             feedback_snapshot: { ...report, transcript, agendaItems: this.agenda },
           }),
         });
-      } catch {}
+      } catch (e) {
+        console.warn("[LiveAssist] session/end failed:", e);
+      }
     }
 
     return report;
@@ -197,74 +228,77 @@ export class LiveAssistSession {
     if (!text || text === ".") return;
 
     const isFinal = seg.is_final !== false;
-    const isUtteranceEnd = isFinal && seg.utterance_end !== false;
-    const counter = source === "mic" ? this.segIdCounterMic : this.segIdCounterTab;
-    const segId = isUtteranceEnd ? (source === "mic" ? ++this.segIdCounterMic : ++this.segIdCounterTab) : counter;
+    const segId = isFinal
+      ? (source === "mic" ? ++this.segIdCounterMic : ++this.segIdCounterTab)
+      : (source === "mic" ? this.segIdCounterMic : this.segIdCounterTab);
 
     const prev = this.transcriptEntries;
-    let updated: TranscriptEntry[];
     let replacedIdx = -1;
 
-    const STALE_PARTIAL_MS = 8000; // Don't replace partials older than this (new utterance after silence)
-    if (!isFinal) {
-      // Replace last interim with same segId AND same channel; skip if that interim is stale
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].channel === source && prev[i]._segId === segId && prev[i].is_final === false) {
-          const age = prev[i]._ts != null ? Date.now() - prev[i]._ts! : 0;
-          if (age < STALE_PARTIAL_MS) replacedIdx = i;
-          break;
-        }
-      }
-      if (replacedIdx < 0) {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i].channel === source && prev[i].is_final === false) {
-            const age = prev[i]._ts != null ? Date.now() - prev[i]._ts! : 0;
-            if (age < STALE_PARTIAL_MS) replacedIdx = i;
-            break;
-          }
-        }
-      }
-    } else {
-      // Final: replace interim if exists (same channel + segId)
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].channel === source && prev[i]._segId === segId && prev[i].is_final === false) {
-          replacedIdx = i;
-          break;
-        }
-      }
-      if (replacedIdx < 0) {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i].channel === source && prev[i].is_final === false) {
-            replacedIdx = i;
-            break;
-          }
-        }
-      }
+    // Replace the last non-final, non-promoted entry on this channel that
+    // matches the same _segId.  Finals increment the counter first, so we
+    // look for counter-1 to find the interim belonging to this utterance.
+    const matchId = isFinal ? segId - 1 : segId;
+    for (let i = prev.length - 1; i >= 0; i--) {
+      const p = prev[i];
+      if (p.channel !== source || p.is_final !== false || p._promoted) continue;
+      if (p._segId != null && p._segId !== matchId) continue;
+      replacedIdx = i;
+      break;
     }
 
     const keepId = replacedIdx >= 0 ? prev[replacedIdx]._id : undefined;
+    const { emotion, confidence: emotionConfidence } = deriveEmotion(seg);
+
+    let emotionTimeline: Array<{ offset: number; emotion: string; confidence: number; probs?: { emotion: string; probability: number }[] }> | undefined;
+    if (seg.metadata_probs_timeline?.length) {
+      emotionTimeline = seg.metadata_probs_timeline.map((t) => {
+        const sorted = (t.emotion ?? [])
+          .map((e) => ({ emotion: String(e.token ?? "").toUpperCase().replace(/^EMOTION_/, ""), probability: e.probability ?? 0 }))
+          .sort((a, b) => b.probability - a.probability);
+        const top = sorted[0];
+        let picked = top;
+        if (top && top.emotion === "NEUTRAL" && sorted.length > 1) {
+          const runner = sorted.find((e) => e.emotion !== "NEUTRAL");
+          if (runner && runner.probability > 0.15) picked = runner;
+        }
+        return {
+          offset: t.offset ?? 0,
+          emotion: picked?.emotion || "NEUTRAL",
+          confidence: picked?.probability ?? 0,
+          probs: sorted.slice(0, 4),
+        };
+      });
+    }
+
+    const intent = seg.metadata?.intent
+      ? String(seg.metadata.intent).toUpperCase().replace(/^INTENT_/, "")
+      : undefined;
+    const gender = seg.metadata?.gender || undefined;
+    const age = seg.metadata?.age || undefined;
+    const hasMetadata = emotion || intent || emotionTimeline || gender || age;
     const entry: TranscriptEntry = {
       channel: source,
       text,
       audioOffset: seg.audioOffset,
+      metadata: hasMetadata
+        ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline }
+        : undefined,
       is_final: isFinal,
       _ts: isFinal ? undefined : Date.now(),
       _segId: segId,
       _id: keepId ?? ++this.entryIdCounter,
     };
 
+    let updated: TranscriptEntry[];
     if (replacedIdx >= 0) {
-      if (!isFinal) {
-        updated = [...prev.slice(0, replacedIdx), entry, ...prev.slice(replacedIdx + 1)];
-      } else {
-        const interim = prev[replacedIdx];
-        let finalText = entry.text;
-        if (!seg.utterance_end && interim.text.length > entry.text.length) {
-          const tail = interim.text.slice(entry.text.length).trim();
-          if (tail) finalText = `${entry.text} ${tail}`;
-        }
-        updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
+      const interim = prev[replacedIdx];
+      let finalText = entry.text;
+      if (isFinal && interim.text.length > entry.text.length) {
+        const tail = interim.text.slice(entry.text.length).trim();
+        if (tail) finalText = `${entry.text} ${tail}`;
       }
+      updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
     } else {
       updated = [...prev, entry];
     }
@@ -309,6 +343,7 @@ export class LiveAssistSession {
   private async runFeedback() {
     if (!this._running || this.transcriptEntries.length === 0) return;
     if (!this.config.agentUrl) return;
+    this.feedbackAbort?.abort();
     this.feedbackAbort = new AbortController();
     const signal = this.feedbackAbort.signal;
 

@@ -6,6 +6,7 @@ export class TabCapture {
   private node: AudioWorkletNode | null = null;
   private _capturing = false;
   private _onPcm: (pcm: Int16Array) => void;
+  private _onStopped: (() => void) | null = null;
   private workletUrl: string;
 
   constructor(onPcm: (pcm: Int16Array) => void, workletUrl = "/audio-capture-processor.js") {
@@ -14,6 +15,8 @@ export class TabCapture {
   }
 
   get isCapturing() { return this._capturing; }
+
+  set onStopped(cb: (() => void) | null) { this._onStopped = cb; }
 
   async start(): Promise<string | null> {
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -33,6 +36,13 @@ export class TabCapture {
       this.stream = null;
       return "No audio in selected tab";
     }
+
+    audioTrack.onended = () => {
+      console.warn("[TabCapture] Track ended (user stopped sharing)");
+      this.stop();
+      this._onStopped?.();
+    };
+
     try {
       const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
       this.context = ctx;

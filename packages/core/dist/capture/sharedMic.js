@@ -55,10 +55,14 @@ export class SharedMicManager {
                 processorOptions: { sampleRate: streamRate },
             });
             node.port.onmessage = (e) => {
-                this.consumers.forEach((cb) => { try {
-                    cb(e.data);
-                }
-                catch { } });
+                this.consumers.forEach((cb) => {
+                    try {
+                        cb(e.data);
+                    }
+                    catch (err) {
+                        console.warn("[SharedMic] consumer error:", err);
+                    }
+                });
             };
             source.connect(hpFilter);
             hpFilter.connect(node);

@@ -1,16 +1,21 @@
 export async function streamLiveAssistWithFeedback(params) {
-    const { agentUrl, transcript, userId, mode = "sales_call", userPersonality = "", userTimezone = "UTC", voiceProfileSummary = "", contextFilters = { docs: false, memories: true, notes: true, history: true, emails: false }, documents_payload = [], custom_prompt, agenda_items, emotion_profile, entities, callbacks, signal, } = params;
+    const { agentUrl, transcript, userId, mode = "meeting", agentId, userPersonality = "", userTimezone = "UTC", voiceProfileSummary = "", contextFilters = { docs: false, memories: true, notes: true, history: true, emails: false }, documents_payload = [], custom_prompt, agenda_items, emotion_profile, intent_signals, entities, callbacks, signal, } = params;
     const body = {
         transcript, mode, user_id: userId, device_id: userId,
         context_filters: contextFilters, user_personality: userPersonality,
         user_location: "", user_timezone: userTimezone, documents_payload,
         ...(custom_prompt?.trim() ? { custom_prompt: custom_prompt.trim() } : {}),
+        ...(agentId ? { agent_id: agentId } : {}),
         ...(agenda_items?.length ? { agenda_items } : {}),
         ...(emotion_profile != null ? { emotion_profile } : {}),
+        ...(intent_signals && (intent_signals.user || intent_signals.other) ? { intent_signals } : {}),
         ...(voiceProfileSummary ? { voice_profile_summary: voiceProfileSummary } : {}),
         ...(entities?.length ? { entities } : {}),
     };
     const url = `${agentUrl.replace(/\/$/, "")}/live-assist/process/stream`;
+    if (process.env.NODE_ENV === "development") {
+        console.log("[LiveAssist] Fetching feedback from", url);
+    }
     const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -46,6 +51,11 @@ export async function streamLiveAssistWithFeedback(params) {
                     const parsed = JSON.parse(raw);
                     const type = parsed.type;
                     const payload = parsed.data;
+                    if (process.env.NODE_ENV === "development") {
+                        if (type === "feedback_chunk" || type === "feedback" || type === "done" || type === "status") {
+                            console.log("[LiveAssist] Stream event:", type, payload ? "(has payload)" : "");
+                        }
+                    }
                     if (type === "feedback_chunk" && payload?.chunk) {
                         callbacks.onFeedbackChunk?.(String(payload.chunk));
                     }

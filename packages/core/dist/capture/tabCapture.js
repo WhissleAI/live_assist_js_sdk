@@ -5,10 +5,12 @@ export class TabCapture {
         this.context = null;
         this.node = null;
         this._capturing = false;
+        this._onStopped = null;
         this._onPcm = onPcm;
         this.workletUrl = workletUrl;
     }
     get isCapturing() { return this._capturing; }
+    set onStopped(cb) { this._onStopped = cb; }
     async start() {
         if (!navigator.mediaDevices?.getDisplayMedia) {
             return "Tab/screen capture is not supported on this device";
@@ -29,6 +31,11 @@ export class TabCapture {
             this.stream = null;
             return "No audio in selected tab";
         }
+        audioTrack.onended = () => {
+            console.warn("[TabCapture] Track ended (user stopped sharing)");
+            this.stop();
+            this._onStopped?.();
+        };
         try {
             const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
             this.context = ctx;

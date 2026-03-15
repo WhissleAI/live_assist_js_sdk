@@ -1,6 +1,6 @@
 import type { BehavioralProfile } from "@whissle/live-assist-core";
 export declare function getProfileSegments(profile: BehavioralProfile): {
-    key: "NEUTRAL" | "HAPPY" | "SAD" | "ANGRY" | "FEAR" | "SURPRISE" | "DISGUST";
+    key: "HAPPY" | "SAD" | "ANGRY" | "NEUTRAL" | "FEAR" | "SURPRISE" | "DISGUST";
     value: number;
 }[];
 export declare function EmotionDonut({ segments, size, centerEmoji }: {

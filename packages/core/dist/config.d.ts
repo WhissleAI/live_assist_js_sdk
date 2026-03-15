@@ -3,6 +3,7 @@ export interface LiveAssistConfig {
     agentUrl: string;
     backendUrl?: string;
     deviceId?: string;
+    agentId?: string;
     llmApiKey?: string;
     llmProvider?: "gemini" | "anthropic" | "local";
     audioWorkletUrl?: string;

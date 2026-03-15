@@ -3,6 +3,15 @@ export interface TranscriptEntry {
   text: string;
   speaker?: string;
   audioOffset?: number;
+  /** Per-chunk metadata (emotion, intent, speaker demographics) from ASR. */
+  metadata?: {
+    emotion?: string;
+    emotionConfidence?: number;
+    intent?: string;
+    gender?: string;
+    age?: string;
+    emotionTimeline?: Array<{ offset: number; emotion: string; confidence: number }>;
+  };
   is_final?: boolean;
   _ts?: number;
   _segId?: number;
@@ -37,6 +46,12 @@ export interface StreamTranscriptSegment {
     age?: Array<{ token: string; probability: number }>;
     gender?: Array<{ token: string; probability: number }>;
   };
+  /** Per-sub-window emotion/intent timeline from Conformer logits. */
+  metadata_probs_timeline?: Array<{
+    offset: number;
+    emotion?: Array<{ token: string; probability: number }>;
+    intent?: Array<{ token: string; probability: number }>;
+  }>;
   entities?: Array<{ entity: string; text: string }>;
   speakerChange?: boolean;
   speakerEmbedding?: number[];

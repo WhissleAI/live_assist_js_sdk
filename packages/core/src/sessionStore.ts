@@ -13,7 +13,20 @@ export interface StoredSession {
   id: string;
   timestamp: number;
   report: SessionReport;
-  transcript: Array<{ channel: string; text: string; is_final?: boolean }>;
+  transcript: Array<{
+    channel: string;
+    text: string;
+    is_final?: boolean;
+    audioOffset?: number;
+    metadata?: {
+      emotion?: string;
+      emotionConfidence?: number;
+      intent?: string;
+      gender?: string;
+      age?: string;
+      emotionTimeline?: Array<{ offset: number; emotion: string; confidence: number }>;
+    };
+  }>;
   agendaItems?: Array<{ id: string; title: string; status?: string; confidence?: number }>;
   audioBlob?: Blob; // optional, not returned when listing
 }

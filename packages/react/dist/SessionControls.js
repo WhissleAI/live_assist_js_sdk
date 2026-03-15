@@ -1,11 +1,14 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useCallback } from "react";
 import { InstructionsModal } from "./InstructionsModal";
-import { getDefaultAgendaItems } from "./agendaDefaults";
+import { getDefaultAgendaItems, getStoredAgenda } from "./agendaDefaults";
 export function SessionControls({ isCapturing, onStart, onStop, onAgendaChange, hasTabAudio, instructions, onInstructionsSave, }) {
     const [includeTab, setIncludeTab] = useState(false);
     const [recordAudio, setRecordAudio] = useState(true);
-    const [agendaItems, setAgendaItems] = useState([]);
+    const [agendaItems, setAgendaItems] = useState(() => {
+        const stored = getStoredAgenda();
+        return stored.length > 0 ? stored : getDefaultAgendaItems();
+    });
     const [newItem, setNewItem] = useState("");
     const [showInstructions, setShowInstructions] = useState(false);
     const addAgendaItem = useCallback(() => {
@@ -29,9 +32,10 @@ export function SessionControls({ isCapturing, onStart, onStop, onAgendaChange, 
         onAgendaChange?.(next);
     }, [agendaItems, onAgendaChange]);
     const handleStart = useCallback(() => {
+        const agenda = agendaItems.length > 0 ? agendaItems : getDefaultAgendaItems();
         onStart({
             includeTab,
-            agenda: agendaItems.length > 0 ? agendaItems : undefined,
+            agenda,
             instructions: instructions?.trim() || undefined,
             recordAudio,
         });

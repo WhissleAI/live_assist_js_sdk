@@ -16,8 +16,8 @@ const emptyProfile = (): BehavioralProfile => ({
 });
 
 function normalizeKey(token: string, prefix: string): string {
-  const stripped = token.replace(new RegExp(`^${prefix}`), "").trim() || token;
-  return prefix === "EMOTION_" ? stripped.toUpperCase() : stripped;
+  const stripped = token.startsWith(prefix) ? token.slice(prefix.length).trim() : token.trim();
+  return (stripped || token).toUpperCase();
 }
 
 export function createBehavioralProfileManager(initialUser?: BehavioralProfile) {

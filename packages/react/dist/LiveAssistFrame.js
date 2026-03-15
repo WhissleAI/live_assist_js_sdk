@@ -7,11 +7,11 @@ import { AgendaTracker } from "./AgendaTracker";
 import { PersonalitySidebar } from "./PersonalitySidebar";
 const SIDEBAR_WIDTH = 140;
 /** Embeddable frame: [You chart | controls + transcript | Other chart] — wide layout. */
-export function LiveAssistFrame({ agenda, style, className, }) {
+export function LiveAssistFrame({ agenda, agentId, mode, style, className, }) {
     const { isCapturing, hasTabAudio, transcript, userProfile, otherProfile, error, agendaItems, instructions, setInstructions, startCapture, stopCapture, } = useLiveAssist();
     const handleStart = useCallback((opts) => {
-        startCapture({ ...opts, agenda: opts?.agenda ?? agenda });
-    }, [startCapture, agenda]);
+        startCapture({ ...opts, agenda: opts?.agenda ?? agenda, agentId, mode });
+    }, [startCapture, agenda, agentId, mode]);
     const handleStop = useCallback(() => stopCapture(), [stopCapture]);
     const handleAgendaChange = useCallback(() => { }, []);
     const showOtherChart = hasTabAudio && isCapturing;

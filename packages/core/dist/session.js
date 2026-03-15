@@ -8,6 +8,17 @@ import { TabCapture } from "./capture/tabCapture";
 import { AudioRecorder } from "./audioRecorder";
 import { saveSession } from "./sessionStore";
 const FEEDBACK_INTERVAL_MS = 5000;
+function deriveEmotion(seg) {
+    const probs = seg.metadata_probs?.emotion;
+    if (probs?.length) {
+        const top = probs.reduce((a, b) => (a.probability > b.probability ? a : b));
+        return {
+            emotion: top?.token?.toUpperCase().replace(/^EMOTION_/, "") ?? null,
+            confidence: top?.probability,
+        };
+    }
+    return { emotion: seg.metadata?.emotion?.toUpperCase().replace(/^EMOTION_/, "") ?? null };
+}
 export class LiveAssistSession {
     constructor(config) {
         this.listeners = new Map();
@@ -24,6 +35,7 @@ export class LiveAssistSession {
         this.agenda = [];
         this.documents = [];
         this._instructions = "";
+        this._mode = "meeting";
         this.lastDone = null;
         this.segIdCounterMic = 0;
         this.segIdCounterTab = 0;
@@ -44,10 +56,14 @@ export class LiveAssistSession {
         return this;
     }
     emit(event, data) {
-        this.listeners.get(event)?.forEach((cb) => { try {
-            cb(data);
-        }
-        catch { } });
+        this.listeners.get(event)?.forEach((cb) => {
+            try {
+                cb(data);
+            }
+            catch (e) {
+                console.warn(`[LiveAssist] listener error on "${String(event)}":`, e);
+            }
+        });
     }
     get isRunning() { return this._running; }
     get transcript() { return [...this.transcriptEntries]; }
@@ -59,6 +75,8 @@ export class LiveAssistSession {
         this.agenda = options?.agenda ?? [];
         this.documents = options?.documents ?? [];
         this._instructions = options?.instructions ?? "";
+        this._agentId = options?.agentId ?? this.config.agentId;
+        this._mode = options?.mode ?? "meeting";
         this.transcriptEntries = [];
         this.segIdCounterMic = 0;
         this.segIdCounterTab = 0;
@@ -87,6 +105,11 @@ export class LiveAssistSession {
             this.tabAsr.onError = (err) => this.emit("error", err);
             await this.tabAsr.connect();
             this.tabCapture = new TabCapture((pcm) => this.tabAsr?.sendPcm(pcm), workletUrl);
+            this.tabCapture.onStopped = () => {
+                console.warn("[LiveAssist] Tab sharing ended by user");
+                this.tabAsr?.end().catch(() => []);
+                this.tabCapture = null;
+            };
             const tabErr = await this.tabCapture.start();
             if (tabErr && tabErr !== "cancelled")
                 this.emit("error", new Error(tabErr));
@@ -103,7 +126,9 @@ export class LiveAssistSession {
                     this.sessionId = data.session_id ?? null;
                 }
             }
-            catch { }
+            catch (e) {
+                console.warn("[LiveAssist] session/start failed:", e);
+            }
         }
         this.feedbackTimer = setInterval(() => this.runFeedback(), FEEDBACK_INTERVAL_MS);
     }
@@ -135,7 +160,13 @@ export class LiveAssistSession {
         };
         const timestamp = Date.now();
         const id = this.sessionId ?? `session_${timestamp}_${Math.random().toString(36).slice(2, 10)}`;
-        const transcript = this.transcriptEntries.map((e) => ({ channel: e.channel, text: e.text, is_final: e.is_final }));
+        const transcript = this.transcriptEntries.map((e) => ({
+            channel: e.channel,
+            text: e.text,
+            is_final: e.is_final,
+            audioOffset: e.audioOffset,
+            metadata: e.metadata,
+        }));
         const stored = {
             id,
             timestamp,
@@ -157,7 +188,9 @@ export class LiveAssistSession {
                     }),
                 });
             }
-            catch { }
+            catch (e) {
+                console.warn("[LiveAssist] session/end failed:", e);
+            }
         }
         return report;
     }
@@ -212,10 +245,33 @@ export class LiveAssistSession {
             }
         }
         const keepId = replacedIdx >= 0 ? prev[replacedIdx]._id : undefined;
+        const { emotion, confidence: emotionConfidence } = deriveEmotion(seg);
+        let emotionTimeline;
+        if (seg.metadata_probs_timeline?.length) {
+            emotionTimeline = seg.metadata_probs_timeline.map((t) => {
+                const topEmo = t.emotion?.length
+                    ? t.emotion.reduce((a, b) => (a.probability > b.probability ? a : b))
+                    : undefined;
+                return {
+                    offset: t.offset ?? 0,
+                    emotion: topEmo?.token?.toUpperCase().replace(/^EMOTION_/, "") ?? "NEUTRAL",
+                    confidence: topEmo?.probability ?? 0,
+                };
+            });
+        }
+        const intent = seg.metadata?.intent
+            ? String(seg.metadata.intent).toUpperCase().replace(/^INTENT_/, "")
+            : undefined;
+        const gender = seg.metadata?.gender || undefined;
+        const age = seg.metadata?.age || undefined;
+        const hasMetadata = emotion || intent || emotionTimeline || gender || age;
         const entry = {
             channel: source,
             text,
             audioOffset: seg.audioOffset,
+            metadata: hasMetadata
+                ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline }
+                : undefined,
             is_final: isFinal,
             _ts: isFinal ? undefined : Date.now(),
             _segId: segId,
@@ -278,6 +334,9 @@ export class LiveAssistSession {
     async runFeedback() {
         if (!this._running || this.transcriptEntries.length === 0)
             return;
+        if (!this.config.agentUrl)
+            return;
+        this.feedbackAbort?.abort();
         this.feedbackAbort = new AbortController();
         const signal = this.feedbackAbort.signal;
         const now = Date.now();
@@ -293,14 +352,21 @@ export class LiveAssistSession {
             .join("\n");
         if (!transcriptText.trim())
             return;
-        const { user } = this.profileManager.getProfiles();
+        console.log("[LiveAssist] Sending feedback request, transcript length:", transcriptText.length, "agenda items:", this.agenda.length);
+        const { user, other } = this.profileManager.getProfiles();
+        const intentSignals = Object.keys(user.intentProfile).length > 0 || Object.keys(other.intentProfile).length > 0
+            ? { user: user.intentProfile, other: other.intentProfile }
+            : undefined;
         await streamLiveAssistWithFeedback({
             agentUrl: this.config.agentUrl,
             transcript: transcriptText,
             userId: this.deviceId,
+            mode: this._mode,
+            agentId: this._agentId,
             custom_prompt: this._instructions.trim() || undefined,
             agenda_items: this.agenda.length > 0 ? this.agenda.map((a) => ({ id: a.id, title: a.title, status: a.status, confidence: a.confidence })) : undefined,
             emotion_profile: user.emotionProfile,
+            intent_signals: intentSignals,
             documents_payload: this.documents.filter((d) => d.useForContext !== false).map((d) => ({ id: d.id, name: d.name, content: d.content })),
             callbacks: {
                 onFeedbackChunk: (chunk) => this.emit("feedback", { summary: chunk, suggestions: [] }),
