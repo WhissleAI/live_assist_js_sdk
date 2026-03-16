@@ -70,7 +70,7 @@ export function LiveAssistProvider({ config, children }) {
     const stopCapture = useCallback(async () => {
         const s = sessionRef.current;
         if (!s)
-            return { feedbackSummary: "", suggestions: [], actionItems: [], knowledgeItems: [], userProfile: emptyProfile, otherProfile: emptyProfile, keywords: [] };
+            return { feedbackSummary: "", suggestions: [], actionItems: [], knowledgeItems: [], userProfile: emptyProfile, otherProfile: emptyProfile, keywords: [], userKeywords: [], otherKeywords: [] };
         const report = await s.stop();
         setIsCapturing(false);
         setHasTabAudio(false);

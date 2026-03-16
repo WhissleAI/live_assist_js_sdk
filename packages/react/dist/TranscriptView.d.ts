@@ -8,4 +8,18 @@ export interface TranscriptViewProps {
     onSeek?: (sec: number) => void;
 }
 export declare function TranscriptView({ entries, maxHeight, showTimeline, durationSec, currentTimeSec, onSeek, }: TranscriptViewProps): import("react/jsx-runtime").JSX.Element;
+export declare function EmotionTimelineBar({ entries, durationSec, currentTimeSec, onSeek, height, amplitudes, amplitudeIntervalSec, }: {
+    entries: TranscriptEntry[];
+    durationSec: number;
+    currentTimeSec?: number;
+    onSeek?: (sec: number) => void;
+    height?: number;
+    amplitudes?: number[];
+    amplitudeIntervalSec?: number;
+}): import("react/jsx-runtime").JSX.Element | null;
+/** Keyword bag: collects extracted entities as tags for a channel */
+export declare function KeywordBag({ entries, label }: {
+    entries: TranscriptEntry[];
+    label: string;
+}): import("react/jsx-runtime").JSX.Element | null;
 //# sourceMappingURL=TranscriptView.d.ts.map

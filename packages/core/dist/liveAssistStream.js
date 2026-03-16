@@ -96,7 +96,12 @@ export async function streamLiveAssistWithFeedback(params) {
         }
     }
     catch (err) {
-        callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
+        if (err instanceof DOMException && err.name === "AbortError") {
+            // Intentional abort — not a real error
+        }
+        else {
+            callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
+        }
     }
     finally {
         reader.releaseLock();

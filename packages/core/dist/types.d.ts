@@ -14,6 +14,14 @@ export interface TranscriptEntry {
             offset: number;
             emotion: string;
             confidence: number;
+            probs?: {
+                emotion: string;
+                probability: number;
+            }[];
+        }>;
+        entities?: Array<{
+            entity: string;
+            text: string;
         }>;
     };
     is_final?: boolean;
@@ -164,6 +172,8 @@ export interface SessionReport {
     userProfile: BehavioralProfile;
     otherProfile: BehavioralProfile;
     keywords: string[];
+    userKeywords: string[];
+    otherKeywords: string[];
     engagementScore?: number;
     sentimentTrend?: string;
 }

@@ -93,7 +93,7 @@ export function LiveAssistProvider({ config, children }: { config: LiveAssistCon
 
   const stopCapture = useCallback(async (): Promise<SessionReport> => {
     const s = sessionRef.current;
-    if (!s) return { feedbackSummary: "", suggestions: [], actionItems: [], knowledgeItems: [], userProfile: emptyProfile, otherProfile: emptyProfile, keywords: [] };
+    if (!s) return { feedbackSummary: "", suggestions: [], actionItems: [], knowledgeItems: [], userProfile: emptyProfile, otherProfile: emptyProfile, keywords: [], userKeywords: [], otherKeywords: [] };
     const report = await s.stop();
     setIsCapturing(false);
     setHasTabAudio(false);

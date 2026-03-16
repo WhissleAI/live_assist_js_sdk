@@ -1,5 +1,5 @@
-# Live Assist Unified (GPU) — ASR (with models, CUDA) + Agent in a single container
-# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API)
+# Live Assist Unified (GPU) — ASR (with models, CUDA) + Agent + UI in a single container
+# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API + UI)
 #
 # Uses NVIDIA CUDA base for GPU-accelerated ASR inference (4–8x faster than CPU).
 # Run with: docker run --gpus all -p 8001:8001 -p 8765:8765 ...
@@ -7,6 +7,21 @@
 # Build: from live_assist root:
 #   docker build -f live_assist_js_sdk/docker/Dockerfile.unified.gpu -t whissleasr/live-assist:latest-gpu .
 
+# ── Stage 1: Build the demo UI ──
+FROM node:20-slim AS ui-builder
+WORKDIR /build
+COPY live_assist_js_sdk/tsconfig.base.json tsconfig.base.json
+COPY live_assist_js_sdk/packages/core packages/core
+COPY live_assist_js_sdk/packages/react packages/react
+COPY live_assist_js_sdk/examples/transcript-timeline-demo examples/transcript-timeline-demo
+COPY live_assist_js_sdk/public public
+WORKDIR /build/examples/transcript-timeline-demo
+# Install only external deps; Vite aliases resolve local @whissle packages from source
+RUN npm install --ignore-scripts react react-dom \
+    @vitejs/plugin-react vite typescript @types/react @types/react-dom \
+ && npx vite build
+
+# ── Stage 2: CUDA runtime ──
 FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
 ENV PYTHONUNBUFFERED=1 \
@@ -47,8 +62,9 @@ COPY live_assist_js_sdk/packages/server/requirements.txt /app/server/requirement
 RUN pip install --no-cache-dir -r /app/server/requirements.txt
 COPY live_assist_js_sdk/packages/server /app/server
 
-# ── Static assets (AudioWorklet) ──
-COPY live_assist_js_sdk/public /app/public
+# ── Built demo UI + static assets ──
+COPY --from=ui-builder /build/examples/transcript-timeline-demo/dist /app/ui
+COPY live_assist_js_sdk/public/audio-capture-processor.js /app/ui/audio-capture-processor.js
 
 RUN mkdir -p /app/data
 

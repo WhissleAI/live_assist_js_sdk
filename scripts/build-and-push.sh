@@ -198,11 +198,9 @@ fi
 if [ "$PUSH" = true ] && [ "$GPU_ONLY" = false ]; then
   echo ""
   echo ">>> Creating latest manifest (amd64 + arm64)..."
-  docker manifest rm whissleasr/live-assist:latest 2>/dev/null || true
-  docker manifest create whissleasr/live-assist:latest \
+  docker buildx imagetools create -t whissleasr/live-assist:latest \
     whissleasr/live-assist:latest-amd64 \
     whissleasr/live-assist:latest-arm64
-  docker manifest push whissleasr/live-assist:latest
   echo "[manifest] latest created"
 fi
 

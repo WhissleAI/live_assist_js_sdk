@@ -42,6 +42,8 @@ export class LiveAssistSession {
         this.entryIdCounter = 0;
         this.sessionId = null;
         this.audioRecorder = null;
+        this.userKeywordSet = new Set();
+        this.otherKeywordSet = new Set();
         this.config = config;
         this.deviceId = resolveDeviceId(config);
     }
@@ -84,6 +86,8 @@ export class LiveAssistSession {
         this.profileManager.reset();
         this.lastDone = null;
         this.sessionId = null;
+        this.userKeywordSet.clear();
+        this.otherKeywordSet.clear();
         this.audioRecorder = options?.recordAudio ? new AudioRecorder() : null;
         const workletUrl = this.config.audioWorkletUrl ?? "/audio-capture-processor.js";
         console.log("[LiveAssist] Session starting, connecting to ASR:", this.config.asrUrl);
@@ -155,6 +159,8 @@ export class LiveAssistSession {
             userProfile: user,
             otherProfile: other,
             keywords: this.lastDone?.keywords ?? [],
+            userKeywords: [...this.userKeywordSet],
+            otherKeywords: [...this.otherKeywordSet],
             engagementScore: this.lastDone?.engagementScore,
             sentimentTrend: this.lastDone?.sentimentTrend,
         };
@@ -199,63 +205,44 @@ export class LiveAssistSession {
         if (!text || text === ".")
             return;
         const isFinal = seg.is_final !== false;
-        const isUtteranceEnd = isFinal && seg.utterance_end !== false;
-        const counter = source === "mic" ? this.segIdCounterMic : this.segIdCounterTab;
-        const segId = isUtteranceEnd ? (source === "mic" ? ++this.segIdCounterMic : ++this.segIdCounterTab) : counter;
+        const segId = isFinal
+            ? (source === "mic" ? ++this.segIdCounterMic : ++this.segIdCounterTab)
+            : (source === "mic" ? this.segIdCounterMic : this.segIdCounterTab);
         const prev = this.transcriptEntries;
-        let updated;
         let replacedIdx = -1;
-        const STALE_PARTIAL_MS = 8000; // Don't replace partials older than this (new utterance after silence)
-        if (!isFinal) {
-            // Replace last interim with same segId AND same channel; skip if that interim is stale
-            for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].channel === source && prev[i]._segId === segId && prev[i].is_final === false) {
-                    const age = prev[i]._ts != null ? Date.now() - prev[i]._ts : 0;
-                    if (age < STALE_PARTIAL_MS)
-                        replacedIdx = i;
-                    break;
-                }
-            }
-            if (replacedIdx < 0) {
-                for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i].channel === source && prev[i].is_final === false) {
-                        const age = prev[i]._ts != null ? Date.now() - prev[i]._ts : 0;
-                        if (age < STALE_PARTIAL_MS)
-                            replacedIdx = i;
-                        break;
-                    }
-                }
-            }
-        }
-        else {
-            // Final: replace interim if exists (same channel + segId)
-            for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].channel === source && prev[i]._segId === segId && prev[i].is_final === false) {
-                    replacedIdx = i;
-                    break;
-                }
-            }
-            if (replacedIdx < 0) {
-                for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i].channel === source && prev[i].is_final === false) {
-                        replacedIdx = i;
-                        break;
-                    }
-                }
-            }
+        // Replace the last non-final, non-promoted entry on this channel that
+        // matches the same _segId.  Finals increment the counter first, so we
+        // look for counter-1 to find the interim belonging to this utterance.
+        const matchId = isFinal ? segId - 1 : segId;
+        for (let i = prev.length - 1; i >= 0; i--) {
+            const p = prev[i];
+            if (p.channel !== source || p.is_final !== false || p._promoted)
+                continue;
+            if (p._segId != null && p._segId !== matchId)
+                continue;
+            replacedIdx = i;
+            break;
         }
         const keepId = replacedIdx >= 0 ? prev[replacedIdx]._id : undefined;
         const { emotion, confidence: emotionConfidence } = deriveEmotion(seg);
         let emotionTimeline;
         if (seg.metadata_probs_timeline?.length) {
             emotionTimeline = seg.metadata_probs_timeline.map((t) => {
-                const topEmo = t.emotion?.length
-                    ? t.emotion.reduce((a, b) => (a.probability > b.probability ? a : b))
-                    : undefined;
+                const sorted = (t.emotion ?? [])
+                    .map((e) => ({ emotion: String(e.token ?? "").toUpperCase().replace(/^EMOTION_/, ""), probability: e.probability ?? 0 }))
+                    .sort((a, b) => b.probability - a.probability);
+                const top = sorted[0];
+                let picked = top;
+                if (top && top.emotion === "NEUTRAL" && sorted.length > 1) {
+                    const runner = sorted.find((e) => e.emotion !== "NEUTRAL");
+                    if (runner && runner.probability > 0.15)
+                        picked = runner;
+                }
                 return {
                     offset: t.offset ?? 0,
-                    emotion: topEmo?.token?.toUpperCase().replace(/^EMOTION_/, "") ?? "NEUTRAL",
-                    confidence: topEmo?.probability ?? 0,
+                    emotion: picked?.emotion || "NEUTRAL",
+                    confidence: picked?.probability ?? 0,
+                    probs: sorted.slice(0, 4),
                 };
             });
         }
@@ -264,33 +251,38 @@ export class LiveAssistSession {
             : undefined;
         const gender = seg.metadata?.gender || undefined;
         const age = seg.metadata?.age || undefined;
-        const hasMetadata = emotion || intent || emotionTimeline || gender || age;
+        const entities = seg.entities?.length ? seg.entities : undefined;
+        if (isFinal && entities?.length) {
+            const bag = source === "mic" ? this.userKeywordSet : this.otherKeywordSet;
+            for (const ent of entities) {
+                const kw = (ent.text || "").trim().toLowerCase();
+                if (kw && kw.length > 1)
+                    bag.add(kw);
+            }
+        }
+        const hasMetadata = emotion || intent || emotionTimeline || gender || age || entities;
         const entry = {
             channel: source,
             text,
             audioOffset: seg.audioOffset,
             metadata: hasMetadata
-                ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline }
+                ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline, entities }
                 : undefined,
             is_final: isFinal,
             _ts: isFinal ? undefined : Date.now(),
             _segId: segId,
             _id: keepId ?? ++this.entryIdCounter,
         };
+        let updated;
         if (replacedIdx >= 0) {
-            if (!isFinal) {
-                updated = [...prev.slice(0, replacedIdx), entry, ...prev.slice(replacedIdx + 1)];
+            const interim = prev[replacedIdx];
+            let finalText = entry.text;
+            if (isFinal && interim.text.length > entry.text.length) {
+                const tail = interim.text.slice(entry.text.length).trim();
+                if (tail)
+                    finalText = `${entry.text} ${tail}`;
             }
-            else {
-                const interim = prev[replacedIdx];
-                let finalText = entry.text;
-                if (!seg.utterance_end && interim.text.length > entry.text.length) {
-                    const tail = interim.text.slice(entry.text.length).trim();
-                    if (tail)
-                        finalText = `${entry.text} ${tail}`;
-                }
-                updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
-            }
+            updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
         }
         else {
             updated = [...prev, entry];

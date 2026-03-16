@@ -10,13 +10,16 @@ export interface TranscriptEntry {
     intent?: string;
     gender?: string;
     age?: string;
-    emotionTimeline?: Array<{ offset: number; emotion: string; confidence: number }>;
+    emotionTimeline?: Array<{ offset: number; emotion: string; confidence: number; probs?: { emotion: string; probability: number }[] }>;
+    entities?: Array<{ entity: string; text: string }>;
   };
   is_final?: boolean;
   _ts?: number;
   _segId?: number;
   _promoted?: boolean;
   _id?: number; // stable unique id for React key
+  /** Agenda items whose confidence increased because of this segment. */
+  agendaHighlights?: { itemId: string; itemTitle: string; confidenceDelta: number }[];
 }
 
 export interface AgendaItem {
@@ -129,6 +132,8 @@ export interface SessionReport {
   userProfile: BehavioralProfile;
   otherProfile: BehavioralProfile;
   keywords: string[];
+  userKeywords: string[];
+  otherKeywords: string[];
   engagementScore?: number;
   sentimentTrend?: string;
 }

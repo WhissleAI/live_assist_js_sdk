@@ -54,6 +54,8 @@ export declare class LiveAssistSession {
     private entryIdCounter;
     private sessionId;
     private audioRecorder;
+    private userKeywordSet;
+    private otherKeywordSet;
     constructor(config: LiveAssistConfig);
     on<K extends keyof EventMap>(event: K, cb: Listener<K>): this;
     off<K extends keyof EventMap>(event: K, cb: Listener<K>): this;

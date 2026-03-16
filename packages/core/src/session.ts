@@ -65,6 +65,10 @@ export class LiveAssistSession {
   private entryIdCounter = 0;
   private sessionId: string | null = null;
   private audioRecorder: AudioRecorder | null = null;
+  private userKeywordSet = new Set<string>();
+  private otherKeywordSet = new Set<string>();
+  private feedbackSegRange = { from: 0, to: 0 };
+  private prevAgendaConf: Record<string, number> = {};
 
   constructor(config: LiveAssistConfig) {
     this.config = config;
@@ -109,6 +113,8 @@ export class LiveAssistSession {
     this.profileManager.reset();
     this.lastDone = null;
     this.sessionId = null;
+    this.userKeywordSet.clear();
+    this.otherKeywordSet.clear();
     this.audioRecorder = options?.recordAudio ? new AudioRecorder() : null;
 
     const workletUrl = this.config.audioWorkletUrl ?? "/audio-capture-processor.js";
@@ -182,6 +188,8 @@ export class LiveAssistSession {
       userProfile: user,
       otherProfile: other,
       keywords: this.lastDone?.keywords ?? [],
+      userKeywords: [...this.userKeywordSet],
+      otherKeywords: [...this.otherKeywordSet],
       engagementScore: this.lastDone?.engagementScore,
       sentimentTrend: this.lastDone?.sentimentTrend,
     };
@@ -276,13 +284,23 @@ export class LiveAssistSession {
       : undefined;
     const gender = seg.metadata?.gender || undefined;
     const age = seg.metadata?.age || undefined;
-    const hasMetadata = emotion || intent || emotionTimeline || gender || age;
+    const entities = seg.entities?.length ? seg.entities : undefined;
+
+    if (isFinal && entities?.length) {
+      const bag = source === "mic" ? this.userKeywordSet : this.otherKeywordSet;
+      for (const ent of entities) {
+        const kw = (ent.text || "").trim().toLowerCase();
+        if (kw && kw.length > 1) bag.add(kw);
+      }
+    }
+
+    const hasMetadata = emotion || intent || emotionTimeline || gender || age || entities;
     const entry: TranscriptEntry = {
       channel: source,
       text,
       audioOffset: seg.audioOffset,
       metadata: hasMetadata
-        ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline }
+        ? { emotion: emotion ?? undefined, emotionConfidence, intent, gender, age, emotionTimeline, entities }
         : undefined,
       is_final: isFinal,
       _ts: isFinal ? undefined : Date.now(),
@@ -318,6 +336,8 @@ export class LiveAssistSession {
   private mergeAgendaUpdate(update: Array<{ id?: string; status?: string; confidence?: number; sentiment?: string; evidence?: string }>): void {
     if (!update?.length || this.agenda.length === 0) return;
     const statusRank: Record<string, number> = { pending: 0, in_progress: 1, completed: 2, skipped: 1 };
+    const increasedItems: { itemId: string; itemTitle: string; confidenceDelta: number }[] = [];
+
     this.agenda = this.agenda.map((a, i) => {
       const u = update.find((x) => x.id === a.id) ?? update[i];
       if (!u) return a;
@@ -329,6 +349,13 @@ export class LiveAssistSession {
       const bestStatus = newRank >= curRank ? (u.status ?? a.status) : a.status;
       const validStatus = ["pending", "in_progress", "completed", "skipped"].includes(bestStatus ?? "") ? bestStatus : a.status;
       const sentiment = ["positive", "neutral", "negative", "mixed", ""].includes(u.sentiment ?? "") ? u.sentiment : a.sentiment;
+
+      const oldConf = this.prevAgendaConf[a.id] ?? 0;
+      if (bestConf > oldConf + 2) {
+        increasedItems.push({ itemId: a.id, itemTitle: a.title, confidenceDelta: bestConf - oldConf });
+      }
+      this.prevAgendaConf[a.id] = bestConf;
+
       return {
         ...a,
         status: validStatus as AgendaItem["status"],
@@ -337,6 +364,25 @@ export class LiveAssistSession {
         evidence: u.evidence ?? a.evidence,
       };
     });
+
+    if (increasedItems.length > 0) {
+      const range = this.feedbackSegRange;
+      let changed = false;
+      this.transcriptEntries = this.transcriptEntries.map((entry, idx) => {
+        if (idx < range.from || idx >= range.to) return entry;
+        if (entry.is_final === false && !entry._promoted) return entry;
+        if (entry.channel === "assistant") return entry;
+        const existing = entry.agendaHighlights ?? [];
+        const merged = [...existing];
+        for (const h of increasedItems) {
+          if (!merged.some((m) => m.itemId === h.itemId)) merged.push(h);
+        }
+        changed = true;
+        return { ...entry, agendaHighlights: merged };
+      });
+      if (changed) this.emit("transcript", this.transcriptEntries);
+    }
+
     this.emit("agenda", this.agenda);
   }
 
@@ -346,6 +392,9 @@ export class LiveAssistSession {
     this.feedbackAbort?.abort();
     this.feedbackAbort = new AbortController();
     const signal = this.feedbackAbort.signal;
+
+    const prevTo = this.feedbackSegRange.to;
+    this.feedbackSegRange = { from: prevTo, to: this.transcriptEntries.length };
 
     const now = Date.now();
     const transcriptText = this.transcriptEntries

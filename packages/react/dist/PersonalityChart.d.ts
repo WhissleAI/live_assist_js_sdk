@@ -11,6 +11,10 @@ export declare function EmotionDonut({ segments, size, centerEmoji }: {
     size?: number;
     centerEmoji?: boolean;
 }): import("react/jsx-runtime").JSX.Element;
+/**
+ * Vertical profile card — donut fills available width, stats below.
+ * Designed for sidebar placement (150–200px wide).
+ */
 export declare function InlineProfileChart({ profile, size }: {
     profile: BehavioralProfile;
     size?: number;

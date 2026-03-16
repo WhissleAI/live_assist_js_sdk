@@ -84,20 +84,12 @@ Once Docker is running:
 
 ```bash
 git clone https://github.com/WhissleAI/live_assist_js_sdk.git
-cd live_assist_js_sdk/examples/react-app
+cd live_assist_js_sdk/examples/transcript-timeline-demo
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173 and click **Start Session**.
-
-**Smart Agents example** — choose an agent (Commitment Tracker, Discovery Coach, etc.) for tailored feedback:
-
-```bash
-cd live_assist_js_sdk/examples/react-app-smart-agents
-npm install
-npm run dev
-```
+Open http://localhost:5173 — configure your session and click **Start Live Assist**.
 
 > **Troubleshooting:** If you see `ERR_MODULE_NOT_FOUND` for Vite, run `rm -rf node_modules package-lock.json && npm install` and try again.
 
@@ -349,7 +341,7 @@ live_assist_js_sdk/
 │   ├── react/           # React UI components
 │   └── server/          # Python FastAPI agent
 ├── docker/              # Docker images (Dockerfile.unified, Dockerfile.unified.gpu)
-├── examples/            # react-app, react-app-smart-agents
+├── examples/            # transcript-timeline-demo, vanilla-js
 ├── public/              # AudioWorklet
 ├── package.json         # Workspace root
 └── tsconfig.base.json

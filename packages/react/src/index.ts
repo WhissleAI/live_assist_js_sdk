@@ -2,7 +2,7 @@ export { LiveAssistProvider, useLiveAssist } from "./LiveAssistProvider";
 export { useAgents, type Agent } from "./useAgents";
 export { LiveAssistWidget } from "./LiveAssistWidget";
 export { LiveAssistFrame } from "./LiveAssistFrame";
-export { TranscriptView, EmotionTimelineBar, type TranscriptViewProps } from "./TranscriptView";
+export { TranscriptView, EmotionTimelineBar, KeywordBag, type TranscriptViewProps } from "./TranscriptView";
 export { EmotionDonut, InlineProfileChart, getProfileSegments } from "./PersonalityChart";
 export { PersonalitySidebar } from "./PersonalitySidebar";
 export { AgendaTracker } from "./AgendaTracker";

@@ -1,9 +1,24 @@
-# Live Assist Unified — ASR (with models) + Agent in a single container
-# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API)
+# Live Assist Unified — ASR (with models) + Agent + UI in a single container
+# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API + UI)
 #
 # Build: from live_assist root:
 #   docker build -f live_assist_js_sdk/docker/Dockerfile.unified -t whissleasr/live-assist:latest .
 
+# ── Stage 1: Build the demo UI ──
+FROM node:20-slim AS ui-builder
+WORKDIR /build
+COPY live_assist_js_sdk/tsconfig.base.json tsconfig.base.json
+COPY live_assist_js_sdk/packages/core packages/core
+COPY live_assist_js_sdk/packages/react packages/react
+COPY live_assist_js_sdk/examples/transcript-timeline-demo examples/transcript-timeline-demo
+COPY live_assist_js_sdk/public public
+WORKDIR /build/examples/transcript-timeline-demo
+# Install only external deps; Vite aliases resolve local @whissle packages from source
+RUN npm install --ignore-scripts react react-dom \
+    @vitejs/plugin-react vite typescript @types/react @types/react-dom \
+ && npx vite build
+
+# ── Stage 2: Python runtime ──
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,8 +44,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir -r /app/server/requirements.txt
 COPY live_assist_js_sdk/packages/server /app/server
 
-# ── Static assets (AudioWorklet) ──
-COPY live_assist_js_sdk/public /app/public
+# ── Built demo UI + static assets ──
+COPY --from=ui-builder /build/examples/transcript-timeline-demo/dist /app/ui
+COPY live_assist_js_sdk/public/audio-capture-processor.js /app/ui/audio-capture-processor.js
 
 RUN mkdir -p /app/data
 
