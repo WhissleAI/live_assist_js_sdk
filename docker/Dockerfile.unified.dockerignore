@@ -1,0 +1,42 @@
+# Dockerfile.unified-specific ignore rules.
+# Docker BuildKit automatically uses <Dockerfile-name>.dockerignore when present.
+
+**/.git
+**/.DS_Store
+**/node_modules
+**/__pycache__
+**/.next
+**/.env
+**/.env.local
+
+# Exclude unrelated projects
+deep-playlist-backend/
+deep-playlist-python-server/
+deepPlayListWeb/
+deepgram-js-sdk/
+dep-website/
+kenlm-w/
+live_assist_chrome_extension/
+live_assist_chrome_extension.zip
+live_assist_ios/
+live_assist_js-sdk/
+live_assist_macos/
+live_assist_macos_simplified/
+live_assist_mcp/
+live_assist_nextjs/
+live_assist_python_server/
+live_assist_backend/
+live_assist_full_docker/
+live_assist_samples/
+live_assist_test/
+openclaw/
+scripts/
+test_results/
+test_results.json
+test_*.py
+docs/
+
+# Keep what the unified build needs:
+#   decoder_onnx/    (ASR server + models)
+#   models/          (ASR ONNX export)
+#   live_assist_js_sdk/  (SDK + examples)

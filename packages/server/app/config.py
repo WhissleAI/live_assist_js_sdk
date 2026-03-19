@@ -12,6 +12,7 @@ class Settings:
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
     local_llm_url: str = ""
+    rime_api_key: str = ""
     db_path: str = "./data/live_assist.db"
     sessions_dir: str = "./data/sessions"
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -27,6 +28,7 @@ def load_settings() -> Settings:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         local_llm_url=os.getenv("LOCAL_LLM_URL", ""),
+        rime_api_key=os.getenv("RIME_API_KEY", ""),
         db_path=os.getenv("DB_PATH", "./data/live_assist.db"),
         sessions_dir=os.getenv("SESSIONS_DIR", "./data/sessions"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),

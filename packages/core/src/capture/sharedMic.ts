@@ -36,22 +36,30 @@ export class SharedMicManager {
 
   private async _open(): Promise<string | null> {
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return "Microphone access requires a secure context (HTTPS or localhost)";
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       const track = stream.getAudioTracks()[0];
       const settings = track?.getSettings?.();
       const streamRate = (settings?.sampleRate ?? 48000) as number;
-      const ctx = new AudioContext({ sampleRate: streamRate });
+      const AudioCtx = typeof AudioContext !== "undefined"
+        ? AudioContext
+        : ((window as unknown as Record<string, unknown>).webkitAudioContext as typeof AudioContext | undefined) ?? AudioContext;
+      const ctx = new AudioCtx({ sampleRate: streamRate });
+      if (ctx.state === "suspended") await ctx.resume().catch(() => {});
       await ctx.audioWorklet.addModule(this.workletUrl);
       const source = ctx.createMediaStreamSource(stream);
       const hpFilter = ctx.createBiquadFilter();
       hpFilter.type = "highpass";
       hpFilter.frequency.value = 85;
       hpFilter.Q.value = 0.7;
+      const actualRate = ctx.sampleRate;
       const node = new AudioWorkletNode(ctx, "capture-processor", {
         numberOfInputs: 1, numberOfOutputs: 1,
-        processorOptions: { sampleRate: streamRate },
+        processorOptions: { sampleRate: actualRate },
       });
       node.port.onmessage = (e: MessageEvent<Int16Array>) => {
         this.consumers.forEach((cb) => {

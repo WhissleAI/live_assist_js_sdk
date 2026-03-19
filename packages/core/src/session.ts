@@ -243,16 +243,44 @@ export class LiveAssistSession {
     const prev = this.transcriptEntries;
     let replacedIdx = -1;
 
-    // Replace the last non-final, non-promoted entry on this channel that
-    // matches the same _segId.  Finals increment the counter first, so we
-    // look for counter-1 to find the interim belonging to this utterance.
     const matchId = isFinal ? segId - 1 : segId;
+
+    // Pass 1: replace a non-promoted interim
     for (let i = prev.length - 1; i >= 0; i--) {
       const p = prev[i];
       if (p.channel !== source || p.is_final !== false || p._promoted) continue;
       if (p._segId != null && p._segId !== matchId) continue;
       replacedIdx = i;
       break;
+    }
+
+    // Pass 2 (finals only): replace a promoted interim to avoid duplicates
+    if (replacedIdx < 0 && isFinal) {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const p = prev[i];
+        if (p.channel !== source || p.is_final !== false || !p._promoted) continue;
+        if (p._segId != null && p._segId !== matchId) continue;
+        replacedIdx = i;
+        break;
+      }
+
+      // Pass 3: text-overlap dedup — ≥60% word overlap → replace
+      if (replacedIdx < 0) {
+        const newWords = text.toLowerCase().split(/\s+/);
+        if (newWords.length >= 2) {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const p = prev[i];
+            if (p.channel !== source) continue;
+            const pWords = (p.text || "").toLowerCase().split(/\s+/);
+            if (pWords.length < 2) continue;
+            const pSet = new Set(pWords);
+            const overlap = newWords.filter((w) => pSet.has(w)).length;
+            const ratio = overlap / Math.max(newWords.length, pWords.length);
+            if (ratio >= 0.6) { replacedIdx = i; }
+            break;
+          }
+        }
+      }
     }
 
     const keepId = replacedIdx >= 0 ? prev[replacedIdx]._id : undefined;
@@ -310,13 +338,7 @@ export class LiveAssistSession {
 
     let updated: TranscriptEntry[];
     if (replacedIdx >= 0) {
-      const interim = prev[replacedIdx];
-      let finalText = entry.text;
-      if (isFinal && interim.text.length > entry.text.length) {
-        const tail = interim.text.slice(entry.text.length).trim();
-        if (tail) finalText = `${entry.text} ${tail}`;
-      }
-      updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
+      updated = [...prev.slice(0, replacedIdx), entry, ...prev.slice(replacedIdx + 1)];
     } else {
       updated = [...prev, entry];
     }

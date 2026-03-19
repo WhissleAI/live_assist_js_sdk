@@ -31,11 +31,15 @@ LIVE_ASSIST_ROOT="$(cd "$SDK_DIR/.." && pwd)"
 PUSH=true
 GPU_ONLY=false
 AMD64_ONLY=false
+ARM64_ONLY=false
+CPU_ONLY=false
 for arg in "$@"; do
   case "$arg" in
     --no-push)    PUSH=false ;;
     --gpu-only)   GPU_ONLY=true ;;
     --amd64-only) AMD64_ONLY=true ;;
+    --arm64-only) ARM64_ONLY=true ;;
+    --cpu-only)   CPU_ONLY=true ;;
   esac
 done
 
@@ -129,6 +133,10 @@ if [ "$GPU_ONLY" = true ]; then
   echo ">>> Building gpu only..."
 elif [ "$AMD64_ONLY" = true ]; then
   echo ">>> Building cpu-amd64 only (+ manifest for auto-select)..."
+elif [ "$ARM64_ONLY" = true ]; then
+  echo ">>> Building cpu-arm64 only (+ manifest for auto-select)..."
+elif [ "$CPU_ONLY" = true ]; then
+  echo ">>> Building cpu-amd64 + cpu-arm64 (skip GPU)..."
 else
   echo ">>> Building cpu-amd64, cpu-arm64, gpu (one by one)..."
 fi
@@ -155,11 +163,9 @@ build_cpu_arm64() {
       --push \
       "$BUILD_DIR"
   else
-    docker buildx build --platform linux/arm64 \
-      -f "$DOCKERFILE_CPU" \
-      -t whissleasr/live-assist:latest-arm64 \
-      --load \
-      "$BUILD_DIR" 2>/dev/null || echo "[cpu-arm64] Skipped (need buildx for arm64)"
+    # On Apple Silicon, arm64 is native — use plain docker build.
+    # On amd64 hosts, this will still build via QEMU emulation.
+    docker build -f "$DOCKERFILE_CPU" -t whissleasr/live-assist:latest-arm64 "$BUILD_DIR"
   fi
   echo "[cpu-arm64] done"
 }
@@ -188,6 +194,11 @@ if [ "$GPU_ONLY" = true ]; then
   build_gpu
 elif [ "$AMD64_ONLY" = true ]; then
   build_cpu_amd64
+elif [ "$ARM64_ONLY" = true ]; then
+  build_cpu_arm64
+elif [ "$CPU_ONLY" = true ]; then
+  build_cpu_amd64
+  build_cpu_arm64
 else
   build_cpu_amd64
   build_cpu_arm64
@@ -195,7 +206,7 @@ else
 fi
 
 # ── Create latest manifest (amd64 + arm64) for auto-selection ──
-if [ "$PUSH" = true ] && [ "$GPU_ONLY" = false ]; then
+if [ "$PUSH" = true ] && [ "$GPU_ONLY" = false ] && [ "$ARM64_ONLY" = false ]; then
   echo ""
   echo ">>> Creating latest manifest (amd64 + arm64)..."
   docker buildx imagetools create -t whissleasr/live-assist:latest \

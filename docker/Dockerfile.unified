@@ -1,11 +1,12 @@
-# Live Assist Unified — ASR (with models) + Agent + UI in a single container
-# Build from live_assist repo root. Exposes: 8001 (ASR), 8765 (Agent API + UI)
+# Live Assist Unified — ASR (with models) + Agent + UIs in a single container
+# Build from live_assist repo root.
+# Exposes: 8001 (ASR), 8765 (Agent API + Timeline Demo UI), 5174 (Voice Agent UI)
 #
 # Build: from live_assist root:
 #   docker build -f live_assist_js_sdk/docker/Dockerfile.unified -t whissleasr/live-assist:latest .
 
-# ── Stage 1: Build the demo UI ──
-FROM node:20-slim AS ui-builder
+# ── Stage 1a: Build the transcript-timeline-demo UI ──
+FROM node:20-slim AS timeline-builder
 WORKDIR /build
 COPY live_assist_js_sdk/tsconfig.base.json tsconfig.base.json
 COPY live_assist_js_sdk/packages/core packages/core
@@ -13,10 +14,19 @@ COPY live_assist_js_sdk/packages/react packages/react
 COPY live_assist_js_sdk/examples/transcript-timeline-demo examples/transcript-timeline-demo
 COPY live_assist_js_sdk/public public
 WORKDIR /build/examples/transcript-timeline-demo
-# Install only external deps; Vite aliases resolve local @whissle packages from source
 RUN npm install --ignore-scripts react react-dom \
     @vitejs/plugin-react vite typescript @types/react @types/react-dom \
  && npx vite build
+
+# ── Stage 1b: Build the voice-agent UI ──
+FROM node:20-slim AS voice-agent-builder
+WORKDIR /build
+COPY live_assist_js_sdk/tsconfig.base.json tsconfig.base.json
+COPY live_assist_js_sdk/packages/core packages/core
+COPY live_assist_js_sdk/examples/voice-agent examples/voice-agent
+COPY live_assist_js_sdk/public public
+WORKDIR /build/examples/voice-agent
+RUN npm install && npx vite build
 
 # ── Stage 2: Python runtime ──
 FROM python:3.11-slim
@@ -44,9 +54,11 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir -r /app/server/requirements.txt
 COPY live_assist_js_sdk/packages/server /app/server
 
-# ── Built demo UI + static assets ──
-COPY --from=ui-builder /build/examples/transcript-timeline-demo/dist /app/ui
+# ── Built demo UIs + static assets ──
+COPY --from=timeline-builder /build/examples/transcript-timeline-demo/dist /app/ui
 COPY live_assist_js_sdk/public/audio-capture-processor.js /app/ui/audio-capture-processor.js
+COPY --from=voice-agent-builder /build/examples/voice-agent/dist /app/voice-agent-ui
+COPY live_assist_js_sdk/public/audio-capture-processor.js /app/voice-agent-ui/audio-capture-processor.js
 
 RUN mkdir -p /app/data
 
@@ -61,9 +73,12 @@ ENV ASR_MODEL_DIR=/app/asr/model \
     ASR_DEFAULT_LANGUAGE=en \
     ASR_BEAM_WIDTH=100
 
-EXPOSE 8001 8765
+# Voice-agent static file server
+COPY live_assist_js_sdk/docker/serve_static.py /app/serve_static.py
+
+EXPOSE 8001 8765 5174
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -f http://localhost:8001/ && curl -f http://localhost:8765/health || exit 1
+    CMD curl -f http://localhost:8001/ && curl -f http://localhost:8765/health && curl -f http://localhost:5174/ || exit 1
 
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/unified.conf"]
