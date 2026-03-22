@@ -82,8 +82,16 @@ export function executeTool(call: ToolCallResult, state: ToolState): ToolState {
       const idx = Number(call.arguments.item_index ?? -1);
       const items = [...(next.orderItems ?? [])];
       if (idx >= 0 && idx < items.length) {
-        const changes = call.arguments.changes as Partial<OrderItem> | undefined;
-        if (changes) items[idx] = { ...items[idx], ...changes };
+        const changes = call.arguments.changes as Record<string, unknown> | undefined;
+        if (changes) {
+          const updated = { ...items[idx] };
+          if (changes.item != null) updated.item = String(changes.item);
+          if (changes.quantity != null) updated.quantity = Number(changes.quantity);
+          if (changes.size != null) updated.size = String(changes.size);
+          if (changes.price != null) updated.price = Number(changes.price);
+          if (Array.isArray(changes.modifiers)) updated.modifiers = changes.modifiers.map(String);
+          items[idx] = updated;
+        }
       }
       next.orderItems = items;
       break;
@@ -114,15 +122,15 @@ export const RESTAURANT_TOOLS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "add_to_order",
-      description: "Add an item to the customer's order",
+      description: "Add a NEW item to the order. You MUST call this for every item the customer orders. Include the price from the menu.",
       parameters: {
         type: "object",
         properties: {
-          item: { type: "string", description: "Name of the menu item" },
+          item: { type: "string", description: "Name of the menu item exactly as on the menu" },
           quantity: { type: "number", description: "Quantity ordered" },
-          size: { type: "string", description: "Size (small/medium/large) if applicable" },
-          modifiers: { type: "array", items: { type: "string" }, description: "Modifications (e.g., no onions, extra cheese)" },
-          price: { type: "number", description: "Price of the item if known from the menu" },
+          size: { type: "string", description: "Size if applicable (e.g. small, medium, large, extra_large)" },
+          modifiers: { type: "array", items: { type: "string" }, description: "Toppings or modifications" },
+          price: { type: "number", description: "Unit price from the menu for the selected size. REQUIRED when menu is available." },
         },
         required: ["item", "quantity"],
       },
@@ -132,7 +140,7 @@ export const RESTAURANT_TOOLS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "remove_from_order",
-      description: "Remove an item from the order by its index",
+      description: "Remove an item from the order by its 0-based index (shown in the current order state)",
       parameters: {
         type: "object",
         properties: {
@@ -146,17 +154,20 @@ export const RESTAURANT_TOOLS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "modify_order_item",
-      description: "Modify an existing order item",
+      description: "Update an existing item already in the order (e.g., change size, add/remove toppings, change quantity). Use this instead of adding a duplicate.",
       parameters: {
         type: "object",
         properties: {
-          item_index: { type: "number", description: "Index of the item to modify (0-based)" },
+          item_index: { type: "number", description: "Index of the item to modify (0-based, from current order state)" },
           changes: {
             type: "object",
+            description: "Fields to update on the existing item. Only include fields that are changing.",
             properties: {
-              size: { type: "string" },
-              modifiers: { type: "array", items: { type: "string" } },
-              quantity: { type: "number" },
+              item: { type: "string", description: "New item name if changing the item" },
+              size: { type: "string", description: "New size" },
+              modifiers: { type: "array", items: { type: "string" }, description: "Full replacement list of toppings/modifications" },
+              quantity: { type: "number", description: "New quantity" },
+              price: { type: "number", description: "Updated price" },
             },
           },
         },
@@ -168,7 +179,7 @@ export const RESTAURANT_TOOLS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "confirm_order",
-      description: "Confirm the complete order when the customer is done ordering",
+      description: "Confirm the complete order when the customer explicitly says they are done ordering",
       parameters: { type: "object", properties: {} },
     },
   },

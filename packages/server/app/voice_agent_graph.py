@@ -61,15 +61,21 @@ def _convert_tools(raw: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[st
     tools = []
     for t in raw:
         fn = t.get("function", {})
+        name = fn.get("name", "")
+        desc = fn.get("description", "")
+        params = fn.get("parameters", {})
+        if not name:
+            continue
         tools.append({
             "type": "function",
             "function": {
-                "name": fn.get("name", ""),
-                "description": fn.get("description", ""),
-                "parameters": fn.get("parameters", {}),
+                "name": name,
+                "description": desc,
+                "parameters": params,
             },
         })
-    return tools
+    logger.info("Voice agent tools: %s", [t["function"]["name"] for t in tools])
+    return tools if tools else None
 
 
 def _sse(event: Dict[str, Any]) -> str:
@@ -90,7 +96,7 @@ async def stream_chat(
     model = get_chat_model(temperature=temperature, max_tokens=max_tokens)
 
     if lc_tools:
-        model = model.bind_tools(lc_tools)
+        model = model.bind_tools(lc_tools, tool_choice="auto")
 
     collected_tool_calls: List[Dict[str, Any]] = []
     tool_call_chunks: Dict[int, Dict[str, Any]] = {}

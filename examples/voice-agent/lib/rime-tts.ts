@@ -40,7 +40,12 @@ export class RimeTtsClient {
   private config: RimeTtsConfig;
   private _connected = false;
   private _speaking = false;
+  private _closed = false;
+  private _reconnecting = false;
+  private _muted = false;
   private rimeSampleRate: number;
+  private pendingQueue: string[] = [];
+  private recorderNode: AudioNode | null = null;
 
   onSpeakingChange: ((speaking: boolean) => void) | null = null;
   onError: ((err: Error) => void) | null = null;
@@ -59,6 +64,14 @@ export class RimeTtsClient {
     return this._speaking;
   }
 
+  getAudioContext(): AudioContext | null {
+    return this.audioCtx;
+  }
+
+  setRecorderDestination(node: AudioNode): void {
+    this.recorderNode = node;
+  }
+
   private async ensureAudioContext(): Promise<AudioContext> {
     if (!this.audioCtx) {
       this.audioCtx = new AudioCtx({ sampleRate: this.rimeSampleRate });
@@ -69,6 +82,18 @@ export class RimeTtsClient {
     return this.audioCtx;
   }
 
+  private buildWsUrl(): string {
+    const params = new URLSearchParams({
+      speaker: this.config.speaker ?? "cove",
+      modelId: this.config.modelId ?? "mist",
+      audioFormat: "pcm",
+      sampleRate: String(this.rimeSampleRate),
+      segment: "never",
+    });
+    const base = this.config.agentUrl.replace(/\/+$/, "").replace(/^http/, "ws");
+    return `${base}/tts/ws3?${params}`;
+  }
+
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this._connected) {
@@ -76,16 +101,7 @@ export class RimeTtsClient {
         return;
       }
 
-      const params = new URLSearchParams({
-        speaker: this.config.speaker ?? "cove",
-        modelId: this.config.modelId ?? "mist",
-        audioFormat: "pcm",
-        sampleRate: String(this.rimeSampleRate),
-        segment: "never",
-      });
-
-      const base = this.config.agentUrl.replace(/\/+$/, "").replace(/^http/, "ws");
-      const url = `${base}/tts/ws3?${params}`;
+      const url = this.buildWsUrl();
       const ws = new WebSocket(url);
       let settled = false;
 
@@ -103,9 +119,12 @@ export class RimeTtsClient {
         settled = true;
         this.ws = ws;
         this._connected = true;
+        this._reconnecting = false;
 
         await this.ensureAudioContext();
         this.nextPlayTime = 0;
+
+        this.drainPendingQueue();
         resolve();
       };
 
@@ -142,20 +161,57 @@ export class RimeTtsClient {
           settled = true;
           reject(new Error("Rime TTS connection closed"));
         }
+        if (!this._closed) {
+          this.tryReconnect();
+        }
       };
     });
   }
 
+  private tryReconnect() {
+    if (this._closed || this._reconnecting) return;
+    this._reconnecting = true;
+    console.log("[RimeTTS] Connection lost, reconnecting in 1s...");
+    setTimeout(() => {
+      if (this._closed) return;
+      this.connect().catch((err) => {
+        console.warn("[RimeTTS] Reconnect failed:", err.message);
+        this._reconnecting = false;
+      });
+    }, 1000);
+  }
+
+  private drainPendingQueue() {
+    while (this.pendingQueue.length > 0 && this.ws && this._connected) {
+      const msg = this.pendingQueue.shift()!;
+      this.ws.send(msg);
+    }
+  }
+
+  mute() {
+    this._muted = true;
+    this.clear();
+  }
+
+  unmute() {
+    this._muted = false;
+    this.nextPlayTime = 0;
+  }
+
   private handleAudioChunk(base64Data: string) {
-    if (!this.audioCtx) return;
+    if (!this.audioCtx || this._muted) return;
 
     if (this.audioCtx.state === "suspended") {
       this.audioCtx.resume().catch(() => {});
     }
 
     const binary = atob(base64Data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
+    const len = binary.length;
+    if (len < 2) return;
+    // Int16Array requires even byte length — truncate trailing odd byte
+    const evenLen = len & ~1;
+    const bytes = new Uint8Array(evenLen);
+    for (let i = 0; i < evenLen; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
 
@@ -188,6 +244,9 @@ export class RimeTtsClient {
     const source = this.audioCtx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.audioCtx.destination);
+    if (this.recorderNode) {
+      source.connect(this.recorderNode);
+    }
 
     const now = this.audioCtx.currentTime;
     const startTime = Math.max(now + 0.01, this.nextPlayTime);
@@ -213,18 +272,29 @@ export class RimeTtsClient {
   }
 
   speak(text: string, contextId?: string) {
-    if (!this.ws || !this._connected) return;
     const msg: Record<string, string> = { text };
     if (contextId) msg.contextId = contextId;
-    this.ws.send(JSON.stringify(msg));
+    const payload = JSON.stringify(msg);
+
+    if (this.ws && this._connected) {
+      this.ws.send(payload);
+    } else if (!this._closed) {
+      this.pendingQueue.push(payload);
+      this.tryReconnect();
+    }
   }
 
   flush() {
-    if (!this.ws || !this._connected) return;
-    this.ws.send(JSON.stringify({ operation: "flush" }));
+    const payload = JSON.stringify({ operation: "flush" });
+    if (this.ws && this._connected) {
+      this.ws.send(payload);
+    } else if (!this._closed) {
+      this.pendingQueue.push(payload);
+    }
   }
 
   clear() {
+    this.pendingQueue = [];
     if (this.ws && this._connected) {
       this.ws.send(JSON.stringify({ operation: "clear" }));
     }
@@ -237,6 +307,8 @@ export class RimeTtsClient {
   }
 
   close() {
+    this._closed = true;
+    this.pendingQueue = [];
     this.clear();
     if (this.ws) {
       try {

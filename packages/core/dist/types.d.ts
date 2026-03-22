@@ -29,6 +29,12 @@ export interface TranscriptEntry {
     _segId?: number;
     _promoted?: boolean;
     _id?: number;
+    /** Agenda items whose confidence increased because of this segment. */
+    agendaHighlights?: {
+        itemId: string;
+        itemTitle: string;
+        confidenceDelta: number;
+    }[];
 }
 export interface AgendaItem {
     id: string;
@@ -100,6 +106,8 @@ export interface AsrStreamConfig {
     token?: string;
     speakerEmbedding?: boolean;
     ptt_mode?: boolean;
+    hotwords?: string[];
+    hotwordWeight?: number;
 }
 export interface LiveAssistFeedback {
     summary: string;

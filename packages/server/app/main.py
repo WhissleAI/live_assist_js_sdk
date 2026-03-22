@@ -14,6 +14,7 @@ from .config import settings
 from .routes.live_assist import router as live_assist_router
 from .routes.voice_agent import router as voice_agent_router
 from .routes.tts_proxy import router as tts_proxy_router
+from .routes.asr_proxy import router as asr_proxy_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
 log = logging.getLogger("live-assist")
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(live_assist_router)
 app.include_router(voice_agent_router)
 app.include_router(tts_proxy_router)
+app.include_router(asr_proxy_router)
 
 
 @app.get("/health")
@@ -68,15 +70,23 @@ async def _on_startup():
     threading.Thread(target=_send_install_ping, daemon=True).start()
 
 
-# Serve the built demo UI if /app/ui exists (Docker deployment).
+# Serve a built UI if available (Docker deployment).
+# Check voice-agent UI first, then fall back to the default /app/ui.
 # Mounted last so API routes take priority over static files.
-UI_DIR = Path(os.getenv("UI_DIR", "/app/ui"))
-if UI_DIR.is_dir() and (UI_DIR / "index.html").exists():
-    app.mount("/assets", StaticFiles(directory=str(UI_DIR / "assets")), name="ui-assets")
+_VA_DIR = Path("/app/voice-agent-ui")
+UI_DIR = _VA_DIR if (_VA_DIR.is_dir() and (_VA_DIR / "index.html").exists()) \
+    else Path(os.getenv("UI_DIR", "/app/ui"))
 
-    @app.get("/audio-capture-processor.js")
-    async def audio_worklet():
-        return FileResponse(str(UI_DIR / "audio-capture-processor.js"), media_type="application/javascript")
+if UI_DIR.is_dir() and (UI_DIR / "index.html").exists():
+    _assets_dir = UI_DIR / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="ui-assets")
+
+    _worklet = UI_DIR / "audio-capture-processor.js"
+    if _worklet.exists():
+        @app.get("/audio-capture-processor.js")
+        async def audio_worklet():
+            return FileResponse(str(_worklet), media_type="application/javascript")
 
     @app.get("/{path:path}")
     async def spa_fallback(path: str):

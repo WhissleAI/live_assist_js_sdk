@@ -1,8 +1,9 @@
-import React from "react";
-import { EMOTION_COLORS } from "@whissle/live-assist-core";
+import React, { useState } from "react";
+import { EMOTION_COLORS, EMOTION_EMOJI, getDominantEmotion } from "@whissle/live-assist-core";
+import type { BehavioralProfile } from "@whissle/live-assist-core";
 import type { SidebarMode } from "./lib/presets";
 import type { ConversationMessage } from "./App";
-import type { UploadedDocument } from "./lib/documents";
+import type { UploadedDocument, StructuredMenu } from "./lib/documents";
 import type { ToolState, OrderItem } from "./lib/tools";
 
 interface Props {
@@ -10,12 +11,49 @@ interface Props {
   messages: ConversationMessage[];
   documents: UploadedDocument[];
   toolState: ToolState;
+  liveProfile?: BehavioralProfile | null;
+  sessionStartTime?: number;
 }
 
-export default function Sidebar({ mode, messages, documents, toolState }: Props) {
+function computeCSAT(profile: BehavioralProfile): number {
+  const happy = profile.emotionProfile.HAPPY ?? 0;
+  const neutral = profile.emotionProfile.NEUTRAL ?? 0;
+  const angry = profile.emotionProfile.ANGRY ?? 0;
+  const sad = profile.emotionProfile.SAD ?? 0;
+  const total = happy + neutral + angry + sad;
+  if (total < 0.01) return 3.0;
+  return 1 + 4 * ((happy + 0.5 * neutral) / total);
+}
+
+function computeClarity(messages: ConversationMessage[]): number {
+  const userCount = messages.filter((m) => m.role === "user").length;
+  if (userCount === 0) return 1;
+  const clarificationPatterns = /could you repeat|didn't (?:quite )?(?:catch|understand)|sorry,? i|which size|clarify|trouble understanding/i;
+  const clarifications = messages.filter(
+    (m) => m.role === "assistant" && clarificationPatterns.test(m.content),
+  ).length;
+  return Math.max(0, 1 - clarifications / userCount);
+}
+
+export default function Sidebar({ mode, messages, documents, toolState, liveProfile, sessionStartTime }: Props) {
   return (
     <div className="session-sidebar">
-      {mode === "order" && <OrderSidebar items={toolState.orderItems ?? []} confirmed={toolState.orderConfirmed ?? false} />}
+      {mode === "order" && (
+        <>
+          <OrderSidebar items={toolState.orderItems ?? []} confirmed={toolState.orderConfirmed ?? false} />
+          {(() => {
+            const menuDoc = documents.find((d) => d.menu);
+            return menuDoc?.menu ? <MenuBrowser menu={menuDoc.menu} /> : null;
+          })()}
+          {liveProfile && liveProfile.segmentCount > 0 && (
+            <CustomerMoodPanel
+              profile={liveProfile}
+              messages={messages}
+              sessionStartTime={sessionStartTime ?? Date.now()}
+            />
+          )}
+        </>
+      )}
       {mode === "emotion" && <EmotionSidebar messages={messages} />}
       {mode === "checklist" && <ChecklistSidebar checklist={toolState.checklist ?? []} flaggedIssues={toolState.flaggedIssues ?? []} />}
       {mode === "citations" && <CitationsSidebar messages={messages} documents={documents} />}
@@ -57,6 +95,131 @@ function OrderSidebar({ items, confirmed }: { items: OrderItem[]; confirmed: boo
         </div>
       )}
       {confirmed && <div className="sidebar-order-confirmed">Order Confirmed</div>}
+    </div>
+  );
+}
+
+function CustomerMoodPanel({
+  profile,
+  messages,
+  sessionStartTime,
+}: {
+  profile: BehavioralProfile;
+  messages: ConversationMessage[];
+  sessionStartTime: number;
+}) {
+  const dominant = getDominantEmotion(profile);
+  const emoji = EMOTION_EMOJI[dominant] || "😐";
+  const csat = computeCSAT(profile);
+  const clarity = computeClarity(messages);
+  const elapsedSec = Math.max(1, Math.round((Date.now() - sessionStartTime) / 1000));
+  const minutes = Math.floor(elapsedSec / 60);
+  const seconds = elapsedSec % 60;
+
+  const sortedEmotions = Object.entries(profile.emotionProfile)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+  const emotionTotal = sortedEmotions.reduce((s, [, v]) => s + v, 0) || 1;
+
+  return (
+    <div className="sidebar-section sidebar-cx-panel">
+      <div className="sidebar-title">Customer Experience</div>
+
+      <div className="sidebar-mood-gauge">
+        <span className="sidebar-mood-emoji">{emoji}</span>
+        <div className="sidebar-mood-info">
+          <span className="sidebar-mood-dominant" style={{ color: EMOTION_COLORS[dominant] || "#9ca3af" }}>
+            {dominant.charAt(0) + dominant.slice(1).toLowerCase()}
+          </span>
+          <span className="sidebar-mood-csat">CSAT {csat.toFixed(1)}/5</span>
+        </div>
+      </div>
+
+      <div className="sidebar-metric-row">
+        <span className="sidebar-metric-label">Clarity</span>
+        <div className="sidebar-bar-track">
+          <div
+            className="sidebar-bar-fill"
+            style={{
+              width: `${clarity * 100}%`,
+              background: clarity > 0.7 ? "var(--accent, #10b981)" : clarity > 0.4 ? "#f59e0b" : "#ef4444",
+            }}
+          />
+        </div>
+        <span className="sidebar-metric-value">{Math.round(clarity * 100)}%</span>
+      </div>
+
+      <div className="sidebar-metric-row">
+        <span className="sidebar-metric-label">Duration</span>
+        <span className="sidebar-metric-value">{minutes}:{String(seconds).padStart(2, "0")}</span>
+      </div>
+
+      {sortedEmotions.length > 0 && (
+        <div className="sidebar-mood-bar">
+          {sortedEmotions.map(([emo, val]) => (
+            <div
+              key={emo}
+              className="sidebar-mood-bar-segment"
+              style={{
+                width: `${(val / emotionTotal) * 100}%`,
+                background: EMOTION_COLORS[emo] || "#9ca3af",
+              }}
+              title={`${emo}: ${Math.round((val / emotionTotal) * 100)}%`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuBrowser({ menu }: { menu: StructuredMenu }) {
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
+
+  const toggleCat = (name: string) => {
+    setExpandedCat((prev) => (prev === name ? null : name));
+  };
+
+  if (!menu.categories || menu.categories.length === 0) return null;
+
+  return (
+    <div className="sidebar-section sidebar-menu-browser">
+      <div className="sidebar-title">
+        {menu.restaurant_name || "Menu"}
+      </div>
+      <div className="sidebar-menu-categories">
+        {menu.categories.map((cat) => (
+          <div key={cat.name} className="sidebar-menu-cat">
+            <button
+              type="button"
+              className={`sidebar-menu-cat-header ${expandedCat === cat.name ? "sidebar-menu-cat-header--open" : ""}`}
+              onClick={() => toggleCat(cat.name)}
+            >
+              <span className="sidebar-menu-cat-name">{cat.name}</span>
+              <span className="sidebar-menu-cat-count">{cat.items.length}</span>
+              <span className="sidebar-menu-cat-chevron">{expandedCat === cat.name ? "▾" : "▸"}</span>
+            </button>
+            {expandedCat === cat.name && (
+              <div className="sidebar-menu-items">
+                {cat.items.map((item, i) => {
+                  const price = item.prices?.default;
+                  return (
+                    <div key={i} className="sidebar-menu-item">
+                      <span className="sidebar-menu-item-name">
+                        {item.name}
+                        {item.popular && <span className="sidebar-menu-item-popular">★</span>}
+                      </span>
+                      {price != null && (
+                        <span className="sidebar-menu-item-price">${price.toFixed(2)}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

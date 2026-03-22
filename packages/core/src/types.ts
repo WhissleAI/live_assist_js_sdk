@@ -69,6 +69,8 @@ export interface AsrStreamConfig {
   token?: string;
   speakerEmbedding?: boolean;
   ptt_mode?: boolean;
+  hotwords?: string[];
+  hotwordWeight?: number;
 }
 
 export interface LiveAssistFeedback {

@@ -1,0 +1,100 @@
+/* ── Camera Capture ── */
+.setup-camera-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.setup-camera-btn:hover { border-color: var(--accent); color: var(--accent); }
+.setup-camera-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.setup-camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.setup-camera-modal {
+  width: 90vw;
+  max-width: 640px;
+  background: #000;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.setup-camera-video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #111;
+}
+
+.setup-camera-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: rgba(0, 0, 0, 0.9);
+}
+
+.setup-camera-cancel {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  font-family: var(--font);
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  min-width: 60px;
+  min-height: 44px;
+}
+
+.setup-camera-cancel:hover { background: rgba(255, 255, 255, 0.1); }
+
+.setup-camera-capture {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s;
+  min-height: 44px;
+}
+
+.setup-camera-capture:hover { transform: scale(1.05); }
+.setup-camera-capture:active { transform: scale(0.95); }
+
+.setup-camera-shutter {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: #fff;
+  transition: background 0.1s;
+}
+
+.setup-camera-capture:active .setup-camera-shutter { background: #ccc; }

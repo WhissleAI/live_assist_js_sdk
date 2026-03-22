@@ -1,8 +1,7 @@
 """TTS WebSocket proxy — forwards browser WS to Rime with auth headers.
 
-Browsers cannot set custom headers on WebSocket connections, so Rime's
-Authorization header requirement prevents direct browser-to-Rime connections.
-This proxy adds the Authorization header during the upstream handshake.
+Keeps the client connection alive and auto-reconnects to Rime upstream
+when Rime closes the connection (which happens after each synthesis flush).
 """
 
 import asyncio
@@ -18,6 +17,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 RIME_WS_BASE = "wss://users-ws.rime.ai"
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY = 0.3
 
 
 @router.websocket("/tts/ws3")
@@ -29,7 +30,7 @@ async def tts_proxy(
     sampleRate: int = Query(default=22050),
     segment: str = Query(default="never"),
 ):
-    """Proxy WebSocket to Rime /ws3 with server-side auth."""
+    """Proxy WebSocket to Rime /ws3 with server-side auth and upstream auto-reconnect."""
     api_key = settings.rime_api_key
     if not api_key:
         await ws.close(code=4001, reason="RIME_API_KEY not configured on server")
@@ -41,55 +42,121 @@ async def tts_proxy(
     rime_url = f"{RIME_WS_BASE}/ws3?{params}"
     headers = {"Authorization": f"Bearer {api_key}"}
 
+    # Shared state between tasks
     upstream: Optional[websockets.WebSocketClientProtocol] = None
-    try:
-        upstream = await websockets.connect(rime_url, additional_headers=headers)
+    upstream_lock = asyncio.Lock()
+    client_alive = True
 
-        async def forward_to_rime():
+    async def connect_upstream() -> Optional[websockets.WebSocketClientProtocol]:
+        """Connect (or reconnect) to Rime upstream."""
+        for attempt in range(MAX_RECONNECT_ATTEMPTS):
             try:
-                while True:
-                    data = await ws.receive_text()
-                    await upstream.send(data)
-            except WebSocketDisconnect:
-                pass
-            except Exception:
-                pass
+                conn = await websockets.connect(
+                    rime_url,
+                    additional_headers=headers,
+                    ping_interval=20,
+                    ping_timeout=10,
+                )
+                return conn
+            except Exception as e:
+                logger.warning("Rime connect attempt %d failed: %s", attempt + 1, e)
+                if attempt < MAX_RECONNECT_ATTEMPTS - 1:
+                    await asyncio.sleep(RECONNECT_DELAY * (attempt + 1))
+        return None
 
-        async def forward_from_rime():
-            try:
-                async for msg in upstream:
-                    if isinstance(msg, str):
-                        await ws.send_text(msg)
-                    else:
-                        await ws.send_bytes(msg)
-            except websockets.exceptions.ConnectionClosed:
-                pass
-            except Exception:
-                pass
+    async def ensure_upstream() -> Optional[websockets.WebSocketClientProtocol]:
+        """Get a live upstream connection, reconnecting if needed."""
+        nonlocal upstream
+        async with upstream_lock:
+            if upstream is not None:
+                # Cross-version check: try .open (v10/v11), fall back to checking .close_code (v12+)
+                is_alive = getattr(upstream, "open", None)
+                if is_alive is None:
+                    # v12+: connection is alive if close_code is not set
+                    is_alive = getattr(upstream, "close_code", "NOT_FOUND") is None
+                if is_alive:
+                    return upstream
+                # Connection is dead
+                try:
+                    await upstream.close()
+                except Exception:
+                    pass
+                upstream = None
+            upstream = await connect_upstream()
+            return upstream
 
-        done, pending = await asyncio.wait(
-            [
-                asyncio.create_task(forward_to_rime()),
-                asyncio.create_task(forward_from_rime()),
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-
-    except websockets.exceptions.InvalidStatusCode as e:
-        logger.error("Rime upstream connection rejected: %s", e)
+    async def forward_to_rime():
+        """Read from client, forward to Rime. Reconnect upstream as needed."""
+        nonlocal client_alive
         try:
-            await ws.close(code=4002, reason=f"Rime rejected connection: {e.status_code}")
+            while client_alive:
+                try:
+                    data = await ws.receive_text()
+                except WebSocketDisconnect:
+                    client_alive = False
+                    return
+
+                conn = await ensure_upstream()
+                if not conn:
+                    logger.error("Cannot reach Rime upstream after retries")
+                    client_alive = False
+                    return
+
+                try:
+                    await conn.send(data)
+                except websockets.exceptions.ConnectionClosed:
+                    # Upstream died mid-send — reconnect and retry once
+                    conn = await ensure_upstream()
+                    if conn:
+                        try:
+                            await conn.send(data)
+                        except Exception:
+                            pass
         except Exception:
-            pass
+            client_alive = False
+
+    async def forward_from_rime():
+        """Read from Rime, forward to client. Restart when upstream closes."""
+        nonlocal upstream, client_alive
+        while client_alive:
+            conn = await ensure_upstream()
+            if not conn:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                async for msg in conn:
+                    if not client_alive:
+                        return
+                    try:
+                        if isinstance(msg, str):
+                            await ws.send_text(msg)
+                        else:
+                            await ws.send_bytes(msg)
+                    except Exception:
+                        client_alive = False
+                        return
+            except websockets.exceptions.ConnectionClosed:
+                # Upstream closed (normal after flush) — loop will reconnect
+                async with upstream_lock:
+                    upstream = None
+            except Exception:
+                async with upstream_lock:
+                    upstream = None
+
+    try:
+        upstream = await connect_upstream()
+        if not upstream:
+            await ws.close(code=4002, reason="Cannot connect to Rime")
+            return
+
+        await asyncio.gather(
+            forward_to_rime(),
+            forward_from_rime(),
+        )
     except Exception as e:
         logger.error("TTS proxy error: %s", e)
-        try:
-            await ws.close(code=4003, reason="TTS proxy error")
-        except Exception:
-            pass
     finally:
+        client_alive = False
         if upstream:
             try:
                 await upstream.close()

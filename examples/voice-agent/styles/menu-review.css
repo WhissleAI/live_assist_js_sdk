@@ -1,0 +1,151 @@
+/* ── Menu Review ── */
+.menu-review-root {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(22, 163, 74, 0.04) 0%, transparent 60%),
+    var(--bg);
+}
+
+.menu-review-container {
+  width: 100%;
+  max-width: 780px;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.menu-review-header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; }
+
+.menu-review-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.menu-review-back:hover { background: var(--bg-surface); color: var(--text); }
+
+.menu-review-header-text h1 { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.menu-review-header-text p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+
+.menu-review-stats {
+  display: flex;
+  gap: 1px;
+  background: var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.menu-review-stat { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 16px 12px; background: var(--bg-surface); }
+.menu-review-stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+.menu-review-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-top: 2px; }
+
+.menu-review-name-section { margin-bottom: 24px; }
+.menu-review-name-label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 8px; }
+
+.menu-review-name-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.menu-review-name-input:focus { border-color: var(--accent); }
+
+.menu-review-categories { display: flex; flex-direction: column; gap: 20px; }
+.menu-review-category { border: 1px solid var(--border-light); border-radius: var(--radius); overflow: hidden; }
+.menu-review-category-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border-light); }
+
+.menu-review-category-name { flex: 1; background: none; border: none; font-size: 15px; font-weight: 600; color: var(--text); outline: none; padding: 2px 0; }
+.menu-review-category-name:focus { border-bottom: 1px solid var(--accent); }
+.menu-review-category-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+.menu-review-remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 4px; transition: color 0.15s, background 0.15s; }
+.menu-review-remove-btn:hover { color: var(--error); background: var(--error-bg); }
+
+.menu-review-items { display: flex; flex-direction: column; }
+.menu-review-item { border-bottom: 1px solid var(--border-light); }
+.menu-review-item:last-child { border-bottom: none; }
+
+.menu-review-item-main { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; transition: background 0.12s; }
+.menu-review-item-main:hover { background: rgba(0, 0, 0, 0.015); }
+.menu-review-item--editing .menu-review-item-main { background: var(--accent-dim); }
+.menu-review-item-info { flex: 1; min-width: 0; }
+.menu-review-item-name { display: block; font-size: 14px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-review-item-desc { display: block; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.menu-review-item-price { font-size: 14px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.menu-review-item-price-range { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.menu-review-item-toggle { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; }
+
+.menu-review-item-edit {
+  padding: 12px 16px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: slideDown 0.15s ease;
+}
+
+.menu-review-edit-row { display: flex; align-items: center; gap: 12px; }
+.menu-review-edit-row label { font-size: 12px; font-weight: 500; color: var(--text-muted); min-width: 80px; }
+.menu-review-edit-row input { flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--text); background: #fff; outline: none; }
+.menu-review-edit-row input:focus { border-color: var(--accent); }
+
+.menu-review-edit-prices label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 6px; }
+.menu-review-price-grid { display: flex; gap: 8px; }
+.menu-review-price-field { display: flex; align-items: center; gap: 4px; flex: 1; }
+.menu-review-price-size { font-size: 11px; font-weight: 600; color: var(--text-muted); min-width: 18px; text-align: center; }
+.menu-review-price-field input { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--text); background: #fff; outline: none; text-align: center; }
+.menu-review-price-field input:focus { border-color: var(--accent); }
+
+.menu-review-remove-item { align-self: flex-start; background: none; border: 1px solid var(--error-border); color: var(--error); font-size: 12px; padding: 4px 12px; border-radius: var(--radius-sm); cursor: pointer; transition: background 0.15s; }
+.menu-review-remove-item:hover { background: var(--error-bg); }
+.menu-review-empty { text-align: center; padding: 48px 24px; color: var(--text-muted); font-size: 14px; }
+
+.menu-review-actions { margin-top: 28px; display: flex; justify-content: center; }
+
+.menu-review-confirm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 36px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.menu-review-confirm-btn:hover:not(:disabled) { background: #15803d; transform: translateY(-1px); }
+.menu-review-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }

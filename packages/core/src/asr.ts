@@ -163,6 +163,10 @@ export class AsrStreamClient {
       metadata_prob: this.cfg.metadataProb !== false,
       speaker_embedding: this.cfg.speakerEmbedding === true,
       ...(this.cfg.ptt_mode ? { ptt_mode: true } : {}),
+      ...(this.cfg.hotwords?.length ? {
+        hotwords: this.cfg.hotwords,
+        hotword_weight: this.cfg.hotwordWeight ?? 10.0,
+      } : {}),
     }));
   }
 

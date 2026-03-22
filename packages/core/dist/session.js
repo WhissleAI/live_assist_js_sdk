@@ -44,6 +44,8 @@ export class LiveAssistSession {
         this.audioRecorder = null;
         this.userKeywordSet = new Set();
         this.otherKeywordSet = new Set();
+        this.feedbackSegRange = { from: 0, to: 0 };
+        this.prevAgendaConf = {};
         this.config = config;
         this.deviceId = resolveDeviceId(config);
     }
@@ -210,10 +212,8 @@ export class LiveAssistSession {
             : (source === "mic" ? this.segIdCounterMic : this.segIdCounterTab);
         const prev = this.transcriptEntries;
         let replacedIdx = -1;
-        // Replace the last non-final, non-promoted entry on this channel that
-        // matches the same _segId.  Finals increment the counter first, so we
-        // look for counter-1 to find the interim belonging to this utterance.
         const matchId = isFinal ? segId - 1 : segId;
+        // Pass 1: replace a non-promoted interim
         for (let i = prev.length - 1; i >= 0; i--) {
             const p = prev[i];
             if (p.channel !== source || p.is_final !== false || p._promoted)
@@ -222,6 +222,39 @@ export class LiveAssistSession {
                 continue;
             replacedIdx = i;
             break;
+        }
+        // Pass 2 (finals only): replace a promoted interim to avoid duplicates
+        if (replacedIdx < 0 && isFinal) {
+            for (let i = prev.length - 1; i >= 0; i--) {
+                const p = prev[i];
+                if (p.channel !== source || p.is_final !== false || !p._promoted)
+                    continue;
+                if (p._segId != null && p._segId !== matchId)
+                    continue;
+                replacedIdx = i;
+                break;
+            }
+            // Pass 3: text-overlap dedup — ≥60% word overlap → replace
+            if (replacedIdx < 0) {
+                const newWords = text.toLowerCase().split(/\s+/);
+                if (newWords.length >= 2) {
+                    for (let i = prev.length - 1; i >= 0; i--) {
+                        const p = prev[i];
+                        if (p.channel !== source)
+                            continue;
+                        const pWords = (p.text || "").toLowerCase().split(/\s+/);
+                        if (pWords.length < 2)
+                            continue;
+                        const pSet = new Set(pWords);
+                        const overlap = newWords.filter((w) => pSet.has(w)).length;
+                        const ratio = overlap / Math.max(newWords.length, pWords.length);
+                        if (ratio >= 0.6) {
+                            replacedIdx = i;
+                        }
+                        break;
+                    }
+                }
+            }
         }
         const keepId = replacedIdx >= 0 ? prev[replacedIdx]._id : undefined;
         const { emotion, confidence: emotionConfidence } = deriveEmotion(seg);
@@ -275,14 +308,7 @@ export class LiveAssistSession {
         };
         let updated;
         if (replacedIdx >= 0) {
-            const interim = prev[replacedIdx];
-            let finalText = entry.text;
-            if (isFinal && interim.text.length > entry.text.length) {
-                const tail = interim.text.slice(entry.text.length).trim();
-                if (tail)
-                    finalText = `${entry.text} ${tail}`;
-            }
-            updated = [...prev.slice(0, replacedIdx), { ...entry, text: finalText }, ...prev.slice(replacedIdx + 1)];
+            updated = [...prev.slice(0, replacedIdx), entry, ...prev.slice(replacedIdx + 1)];
         }
         else {
             updated = [...prev, entry];
@@ -301,6 +327,7 @@ export class LiveAssistSession {
         if (!update?.length || this.agenda.length === 0)
             return;
         const statusRank = { pending: 0, in_progress: 1, completed: 2, skipped: 1 };
+        const increasedItems = [];
         this.agenda = this.agenda.map((a, i) => {
             const u = update.find((x) => x.id === a.id) ?? update[i];
             if (!u)
@@ -313,6 +340,11 @@ export class LiveAssistSession {
             const bestStatus = newRank >= curRank ? (u.status ?? a.status) : a.status;
             const validStatus = ["pending", "in_progress", "completed", "skipped"].includes(bestStatus ?? "") ? bestStatus : a.status;
             const sentiment = ["positive", "neutral", "negative", "mixed", ""].includes(u.sentiment ?? "") ? u.sentiment : a.sentiment;
+            const oldConf = this.prevAgendaConf[a.id] ?? 0;
+            if (bestConf > oldConf + 2) {
+                increasedItems.push({ itemId: a.id, itemTitle: a.title, confidenceDelta: bestConf - oldConf });
+            }
+            this.prevAgendaConf[a.id] = bestConf;
             return {
                 ...a,
                 status: validStatus,
@@ -321,6 +353,28 @@ export class LiveAssistSession {
                 evidence: u.evidence ?? a.evidence,
             };
         });
+        if (increasedItems.length > 0) {
+            const range = this.feedbackSegRange;
+            let changed = false;
+            this.transcriptEntries = this.transcriptEntries.map((entry, idx) => {
+                if (idx < range.from || idx >= range.to)
+                    return entry;
+                if (entry.is_final === false && !entry._promoted)
+                    return entry;
+                if (entry.channel === "assistant")
+                    return entry;
+                const existing = entry.agendaHighlights ?? [];
+                const merged = [...existing];
+                for (const h of increasedItems) {
+                    if (!merged.some((m) => m.itemId === h.itemId))
+                        merged.push(h);
+                }
+                changed = true;
+                return { ...entry, agendaHighlights: merged };
+            });
+            if (changed)
+                this.emit("transcript", this.transcriptEntries);
+        }
         this.emit("agenda", this.agenda);
     }
     async runFeedback() {
@@ -331,6 +385,8 @@ export class LiveAssistSession {
         this.feedbackAbort?.abort();
         this.feedbackAbort = new AbortController();
         const signal = this.feedbackAbort.signal;
+        const prevTo = this.feedbackSegRange.to;
+        this.feedbackSegRange = { from: prevTo, to: this.transcriptEntries.length };
         const now = Date.now();
         const transcriptText = this.transcriptEntries
             .filter((e) => {

@@ -15,6 +15,7 @@ export declare class SharedMicManager {
     removeConsumer(id: string): void;
     private _close;
     get isActive(): boolean;
+    getStream(): MediaStream | null;
     flushWorklet(): void;
     destroy(): void;
 }

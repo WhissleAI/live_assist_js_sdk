@@ -4,6 +4,7 @@ export { createBehavioralProfileManager, EMOTION_KEYS, EMOTION_EMOJI, EMOTION_CO
 export { streamLiveAssistWithFeedback, type IntentSignals } from "./liveAssistStream";
 export { SharedMicManager } from "./capture/sharedMic";
 export { MicCapture } from "./capture/micCapture";
+export { AudioRecorder } from "./audioRecorder";
 export { TabCapture } from "./capture/tabCapture";
 export type { LiveAssistConfig } from "./config";
 export { saveSession, listSessions } from "./sessionStore";

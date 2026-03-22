@@ -109,6 +109,8 @@ export class SharedMicManager {
 
   get isActive() { return this.consumers.size > 0 || this._starting; }
 
+  getStream(): MediaStream | null { return this.stream; }
+
   flushWorklet() { this.workletNode?.port.postMessage("flush"); }
 
   destroy() { this._close(); }

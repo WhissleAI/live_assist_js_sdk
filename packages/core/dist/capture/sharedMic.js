@@ -37,22 +37,31 @@ export class SharedMicManager {
     }
     async _open() {
         try {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                return "Microphone access requires a secure context (HTTPS or localhost)";
+            }
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
             });
             const track = stream.getAudioTracks()[0];
             const settings = track?.getSettings?.();
             const streamRate = (settings?.sampleRate ?? 48000);
-            const ctx = new AudioContext({ sampleRate: streamRate });
+            const AudioCtx = typeof AudioContext !== "undefined"
+                ? AudioContext
+                : window.webkitAudioContext ?? AudioContext;
+            const ctx = new AudioCtx({ sampleRate: streamRate });
+            if (ctx.state === "suspended")
+                await ctx.resume().catch(() => { });
             await ctx.audioWorklet.addModule(this.workletUrl);
             const source = ctx.createMediaStreamSource(stream);
             const hpFilter = ctx.createBiquadFilter();
             hpFilter.type = "highpass";
             hpFilter.frequency.value = 85;
             hpFilter.Q.value = 0.7;
+            const actualRate = ctx.sampleRate;
             const node = new AudioWorkletNode(ctx, "capture-processor", {
                 numberOfInputs: 1, numberOfOutputs: 1,
-                processorOptions: { sampleRate: streamRate },
+                processorOptions: { sampleRate: actualRate },
             });
             node.port.onmessage = (e) => {
                 this.consumers.forEach((cb) => {
@@ -106,6 +115,7 @@ export class SharedMicManager {
         }
     }
     get isActive() { return this.consumers.size > 0 || this._starting; }
+    getStream() { return this.stream; }
     flushWorklet() { this.workletNode?.port.postMessage("flush"); }
     destroy() { this._close(); }
 }

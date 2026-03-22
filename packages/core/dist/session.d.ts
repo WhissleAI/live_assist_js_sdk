@@ -56,6 +56,8 @@ export declare class LiveAssistSession {
     private audioRecorder;
     private userKeywordSet;
     private otherKeywordSet;
+    private feedbackSegRange;
+    private prevAgendaConf;
     constructor(config: LiveAssistConfig);
     on<K extends keyof EventMap>(event: K, cb: Listener<K>): this;
     off<K extends keyof EventMap>(event: K, cb: Listener<K>): this;
