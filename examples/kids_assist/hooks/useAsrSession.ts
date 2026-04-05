@@ -71,6 +71,7 @@ export function useAsrSession(
   asrUrl: string,
   sessionRef: React.MutableRefObject<SessionState>,
   updateSession: (patch: Partial<SessionState>) => void,
+  onUtteranceFlush?: (text: string, speaker: "child" | "other") => void,
 ) {
   const asrRef = useRef<AsrStreamClient | null>(null);
   const micRef = useRef<SharedMicManager | null>(null);
@@ -85,6 +86,8 @@ export function useAsrSession(
   const entityAccRef = useRef<Array<{ entity: string; text: string }>>([]);
   const lastSpeakerChangeRef = useRef(false);
   const lastProfilePushRef = useRef(0);
+  const onUtteranceFlushRef = useRef(onUtteranceFlush);
+  onUtteranceFlushRef.current = onUtteranceFlush;
 
   const flushUtterance = useCallback(() => {
     const text = utteranceBufferRef.current.join(" ").trim();
@@ -144,6 +147,10 @@ export function useAsrSession(
       transcript: nextTranscript,
       moments: nextMoments,
     });
+
+    if (currentSpeakerRef.current === "child") {
+      onUtteranceFlushRef.current?.(text, "child");
+    }
   }, [sessionRef, updateSession]);
 
   const start = useCallback(async () => {

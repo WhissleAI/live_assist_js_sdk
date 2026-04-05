@@ -1,26 +1,17 @@
-import React, { useState, useCallback } from "react";
-import type { UploadedDocument } from "./lib/documents";
-import type { SidebarMode } from "./lib/presets";
-import { getPreset } from "./lib/presets";
-import type { ToolDefinition, ToolCallResult, ToolState } from "./lib/tools";
-import SetupPanel from "./SetupPanel";
-import MenuReview from "./MenuReview";
-import VoiceSession from "./VoiceSession";
-import SessionSummary from "./SessionSummary";
-
-export interface VoiceAgentConfig {
-  rimeSpeaker: string;
-  rimeModel: string;
-  agentUrl: string;
-  asrUrl: string;
-  systemPrompt: string;
-  audioWorkletUrl: string;
-  scenarioId: string;
-  greeting: string;
-  sidebarMode: SidebarMode;
-  enableMetadata: boolean;
-  tools: ToolDefinition[];
-}
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import type { BehavioralProfile } from "@whissle/live-assist-core";
+import AgentRuntime from "./components/AgentRuntime";
+import AdminPortal from "./components/AdminPortal";
+import AgentBuilder from "./components/AgentBuilder";
+import AppShell from "./components/AppShell";
+import SessionsPage from "./components/SessionsPage";
+import SessionDetail from "./components/SessionDetail";
+import TranscribePage from "./components/TranscribePage";
+import TtsPlaygroundPage from "./components/TtsPlaygroundPage";
+import ResearchPage from "./components/ResearchPage";
+import VideoToMusicPage from "./components/VideoToMusicPage";
+import { gatewayConfig } from "./lib/gateway-config";
+import type { AgentConfig } from "./lib/agent-config";
 
 export interface EmotionTimelineEntry {
   offset: number;
@@ -29,170 +20,283 @@ export interface EmotionTimelineEntry {
   probs?: { emotion: string; probability: number }[];
 }
 
-export interface ConversationMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: number;
-  citations?: string[];
-  emotion?: string;
-  emotionConfidence?: number;
-  intent?: string;
-  entities?: Array<{ entity: string; text: string }>;
-  toolCalls?: ToolCallResult[];
-  emotionTimeline?: EmotionTimelineEntry[];
-}
-
-function detectAsrUrl(): string {
-  const loc = typeof window !== "undefined" ? window.location : null;
-  const host = loc?.hostname || "localhost";
-  const port = loc?.port || "";
-  const wsProto = loc?.protocol === "https:" ? "wss:" : "ws:";
-  if (port === "5174") {
-    return `${wsProto}//${host}:8001/asr/stream`;
-  }
-  return `${wsProto}//${loc?.host || host}/asr/stream`;
-}
-
-function detectAgentUrl(): string {
-  const loc = typeof window !== "undefined" ? window.location : null;
-  const host = loc?.hostname || "localhost";
-  const port = loc?.port || "";
-  const proto = loc?.protocol || "http:";
-  if (port === "5174") {
-    return `${proto}//${host}:8765`;
-  }
-  return `${proto}//${loc?.host || host}`;
-}
-
-const INITIAL_CONFIG: VoiceAgentConfig = {
-  rimeSpeaker: "cove",
-  rimeModel: "mistv2",
-  agentUrl: detectAgentUrl(),
-  asrUrl: detectAsrUrl(),
-  systemPrompt: "",
-  audioWorkletUrl: "/audio-capture-processor.js",
-  scenarioId: "general",
-  greeting: "",
-  sidebarMode: "citations",
-  enableMetadata: false,
-  tools: [],
+/** Per-window emotion readings within one aggregated utterance (offsets in seconds, relative to utterance start). */
+export type UtteranceEmotionTimelinePoint = {
+  offset: number;
+  emotion: string;
+  confidence: number;
+  probs?: { emotion: string; probability: number }[];
 };
 
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  timestamp: number;
+  isFinal: boolean;
+  speaker: "user" | "other" | "agent";
+  /** Seconds from stream start — aligns with live-assist TranscriptEntry.audioOffset for spectrogram spans. */
+  audioOffsetSec?: number;
+  /** Fine-grained timeline for this utterance only (relative offsets in seconds). */
+  emotionTimelineUtterance?: UtteranceEmotionTimelinePoint[];
+  emotion?: string;
+  emotionConfidence?: number;
+  /** Full ASR emotion distribution (snapshot at utterance flush). */
+  emotionProbs?: Array<{ emotion: string; probability: number }>;
+  intent?: string;
+  intentProbs?: Array<{ intent: string; probability: number }>;
+  genderProbs?: Array<{ label: string; probability: number }>;
+  ageProbs?: Array<{ label: string; probability: number }>;
+  entities?: Array<{ entity: string; text: string }>;
+}
+
+export interface Moment {
+  id: string;
+  timestamp: number;
+  text: string;
+  emotion: string;
+  emotionConfidence: number;
+  type: "emotion_peak" | "topic" | "speaker_change" | "question" | "concern";
+  speaker: "user" | "other" | "agent";
+  severity?: "low" | "medium" | "high";
+}
+
+export interface SessionState {
+  isActive: boolean;
+  isConnected: boolean;
+  transcript: TranscriptSegment[];
+  moments: Moment[];
+  emotionTimeline: EmotionTimelineEntry[];
+  /** TTS/STT stream timeline (ms from session start); same shape as mic timeline. */
+  agentEmotionTimeline: EmotionTimelineEntry[];
+  currentEmotion: string;
+  currentEmotionProbs: Record<string, number>;
+  profile: BehavioralProfile | null;
+  speakerLabel: "user" | "other";
+  error: string | null;
+  sessionStart: number | null;
+  agentId: string;
+  flaggedConcerns: Array<{ text: string; emotion: string; severity: string; reason: string; timestamp: number }>;
+  topicsDiscussed: string[];
+}
+
+export interface AppSettings {
+  organizationName: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hash-based router
+// ---------------------------------------------------------------------------
+
+type Route =
+  | { page: "voice-agents" }
+  | { page: "builder"; agentId?: string }
+  | { page: "transcribe" }
+  | { page: "tts" }
+  | { page: "research" }
+  | { page: "video-to-music" }
+  | { page: "sessions" }
+  | { page: "session-detail"; sessionId: string }
+  | { page: "settings" }
+  | { page: "runtime"; agentId: string }
+  | { page: "embed"; agentId: string };
+
+function parseRoute(hash: string): Route {
+  const h = hash.replace(/^#\/?/, "");
+
+  const embedMatch = h.match(/^embed\/(.+)$/);
+  if (embedMatch) return { page: "embed", agentId: embedMatch[1] };
+
+  const runtimeMatch = h.match(/^a\/(.+)$/);
+  if (runtimeMatch) return { page: "runtime", agentId: runtimeMatch[1] };
+
+  const editMatch = h.match(/^agents\/(.+)\/edit$/);
+  if (editMatch) return { page: "builder", agentId: editMatch[1] };
+
+  if (h === "agents/new") return { page: "builder" };
+
+  // Redirects for legacy routes
+  const analyticsMatch = h.match(/^agents\/(.+)\/analytics$/);
+  if (analyticsMatch) return { page: "sessions" };
+  if (h === "analytics") return { page: "sessions" };
+
+  const sessionDetailMatch = h.match(/^sessions\/(.+)$/);
+  if (sessionDetailMatch) return { page: "session-detail", sessionId: sessionDetailMatch[1] };
+
+  if (h === "transcribe") return { page: "transcribe" };
+  if (h === "tts") return { page: "tts" };
+  if (h === "research") return { page: "research" };
+  if (h === "video-to-music") return { page: "video-to-music" };
+  if (h === "sessions") return { page: "sessions" };
+  if (h === "settings") return { page: "settings" };
+
+  return { page: "voice-agents" };
+}
+
+function getActivePage(route: Route): string {
+  if (route.page === "voice-agents" || route.page === "builder") return "voice-agents";
+  if (route.page === "sessions" || route.page === "session-detail") return "sessions";
+  return route.page;
+}
+
+function useHashRoute(): Route {
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  return route;
+}
+
+export function navigate(path: string) {
+  window.location.hash = `#/${path}`;
+}
+
+// ---------------------------------------------------------------------------
+// Initial state
+// ---------------------------------------------------------------------------
+
+function loadSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem("whissle_agents_settings");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { organizationName: "" };
+}
+
+const INITIAL_SESSION: SessionState = {
+  isActive: false,
+  isConnected: false,
+  transcript: [],
+  moments: [],
+  emotionTimeline: [],
+  agentEmotionTimeline: [],
+  currentEmotion: "NEUTRAL",
+  currentEmotionProbs: {},
+  profile: null,
+  speakerLabel: "user",
+  error: null,
+  sessionStart: null,
+  agentId: "",
+  flaggedConcerns: [],
+  topicsDiscussed: [],
+};
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+
 export default function App() {
-  const [phase, setPhase] = useState<"setup" | "menu-review" | "session" | "summary">("setup");
-  const [config, setConfig] = useState<VoiceAgentConfig>(() => {
-    const saved = localStorage.getItem("voice-agent-config");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        const preset = getPreset(parsed.scenarioId);
-        return {
-          ...INITIAL_CONFIG,
-          ...parsed,
-          tools: preset?.tools ?? [],
-          sidebarMode: preset?.sidebarMode ?? parsed.sidebarMode ?? "citations",
-          enableMetadata: preset?.enableMetadata ?? parsed.enableMetadata ?? false,
-        };
-      } catch {}
+  const route = useHashRoute();
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [transitioning, setTransitioning] = useState(false);
+  const prevPageRef = useRef(route.page);
+
+  const sessionRef = useRef<SessionState>({ ...INITIAL_SESSION });
+  const [session, setSession] = useState<SessionState>(sessionRef.current);
+
+  const updateSession = useCallback((patch: Partial<SessionState>) => {
+    const next = { ...sessionRef.current, ...patch };
+    sessionRef.current = next;
+    setSession(next);
+  }, []);
+
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      localStorage.setItem("whissle_agents_settings", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    gatewayConfig.initSession().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (prevPageRef.current !== route.page) {
+      setTransitioning(true);
+      const t = setTimeout(() => setTransitioning(false), 30);
+      prevPageRef.current = route.page;
+      return () => clearTimeout(t);
     }
-    return INITIAL_CONFIG;
-  });
-  const [documents, setDocuments] = useState<UploadedDocument[]>([]);
-  const [sessionMessages, setSessionMessages] = useState<ConversationMessage[]>([]);
-  const [sessionToolState, setSessionToolState] = useState<ToolState>({});
-  const [sessionAudioBlob, setSessionAudioBlob] = useState<Blob | undefined>();
+  }, [route.page]);
 
-  const saveConfig = useCallback((cfg: VoiceAgentConfig) => {
-    localStorage.setItem("voice-agent-config", JSON.stringify({
-      rimeSpeaker: cfg.rimeSpeaker,
-      rimeModel: cfg.rimeModel,
-      agentUrl: cfg.agentUrl,
-      asrUrl: cfg.asrUrl,
-      systemPrompt: cfg.systemPrompt,
-      scenarioId: cfg.scenarioId,
-      greeting: cfg.greeting,
-      sidebarMode: cfg.sidebarMode,
-      enableMetadata: cfg.enableMetadata,
-    }));
-  }, []);
+  const isEmbed = route.page === "embed";
 
-  const handleStart = useCallback((cfg: VoiceAgentConfig, docs: UploadedDocument[]) => {
-    setConfig(cfg);
-    setDocuments(docs);
-    saveConfig(cfg);
-
-    const hasMenu = cfg.scenarioId === "restaurant-kiosk" && docs.some((d) => d.menu);
-    setPhase(hasMenu ? "menu-review" : "session");
-  }, [saveConfig]);
-
-  const handleMenuConfirm = useCallback((updatedDoc: UploadedDocument) => {
-    setDocuments((prev) => prev.map((d) => (d.id === updatedDoc.id ? updatedDoc : d)));
-    setPhase("session");
-  }, []);
-
-  const handleMenuBack = useCallback(() => {
-    setPhase("setup");
-  }, []);
-
-  const handleEnd = useCallback((messages: ConversationMessage[], toolState: ToolState, audioBlob?: Blob) => {
-    setSessionMessages(messages);
-    setSessionToolState(toolState);
-    setSessionAudioBlob(audioBlob);
-    setPhase("summary");
-  }, []);
-
-  const handleBackToSetup = useCallback(() => {
-    setSessionMessages([]);
-    setSessionToolState({});
-    setSessionAudioBlob(undefined);
-    setPhase("setup");
-  }, []);
-
-  const handleNewSession = useCallback(() => {
-    setSessionMessages([]);
-    setSessionToolState({});
-    setSessionAudioBlob(undefined);
-    setPhase("session");
-  }, []);
-
-  if (phase === "summary") {
+  if (route.page === "runtime" || route.page === "embed") {
     return (
-      <SessionSummary
-        config={config}
-        messages={sessionMessages}
-        documents={documents}
-        toolState={sessionToolState}
-        audioBlob={sessionAudioBlob}
-        onBackToSetup={handleBackToSetup}
-        onNewSession={handleNewSession}
-      />
+      <div className="app-root">
+        <AgentRuntime
+          agentId={route.agentId}
+          asrUrl={gatewayConfig.asrStreamUrl}
+          session={session}
+          updateSession={updateSession}
+          sessionRef={sessionRef}
+          isEmbed={isEmbed}
+        />
+      </div>
     );
   }
 
-  if (phase === "menu-review") {
-    const menuDoc = documents.find((d) => d.menu);
-    if (menuDoc) {
-      return <MenuReview document={menuDoc} onConfirm={handleMenuConfirm} onBack={handleMenuBack} />;
-    }
-    setPhase("session");
+  const activePage = getActivePage(route);
+
+  let content: React.ReactNode;
+
+  switch (route.page) {
+    case "builder":
+      content = <AgentBuilder agentId={route.agentId} />;
+      break;
+    case "transcribe":
+      content = <TranscribePage />;
+      break;
+    case "tts":
+      content = <TtsPlaygroundPage />;
+      break;
+    case "research":
+      content = <ResearchPage />;
+      break;
+    case "video-to-music":
+      content = <VideoToMusicPage />;
+      break;
+    case "sessions":
+      content = <SessionsPage />;
+      break;
+    case "session-detail":
+      content = <SessionDetail sessionId={route.sessionId} />;
+      break;
+    case "settings":
+      content = (
+        <AdminPortal
+          session={session}
+          settings={settings}
+          updateSettings={updateSettings}
+          viewMode="settings"
+        />
+      );
+      break;
+    case "voice-agents":
+    default:
+      content = (
+        <AdminPortal
+          session={session}
+          settings={settings}
+          updateSettings={updateSettings}
+          viewMode="agents"
+        />
+      );
+      break;
   }
 
-  if (phase === "session") {
-    return (
-      <VoiceSession
-        config={config}
-        documents={documents}
-        onEnd={handleEnd}
-      />
-    );
-  }
+  const pageClass = transitioning ? "page-enter" : "page-enter-active";
 
   return (
-    <SetupPanel
-      initialConfig={config}
-      initialDocuments={documents}
-      onStart={handleStart}
-    />
+    <AppShell activePage={activePage}>
+      <div className={pageClass} key={route.page}>
+        {content}
+      </div>
+    </AppShell>
   );
 }

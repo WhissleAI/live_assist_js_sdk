@@ -1,0 +1,18 @@
+import path from "path";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    allowedHosts: true,
+  },
+  resolve: {
+    alias: {
+      "@whissle/live-assist-core": path.resolve(__dirname, "../../packages/core/src/index.ts"),
+    },
+  },
+  optimizeDeps: {
+    include: ["react", "react-dom"],
+  },
+});

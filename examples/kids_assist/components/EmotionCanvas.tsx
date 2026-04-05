@@ -14,12 +14,20 @@ interface Props {
   emotion: string;
   probs: Record<string, number>;
   isActive: boolean;
+  breathSync?: boolean;
 }
 
-export default function EmotionCanvas({ emotion, probs, isActive }: Props) {
+export default function EmotionCanvas({ emotion, probs, isActive, breathSync }: Props) {
   const style = useMemo((): React.CSSProperties => {
     if (!isActive) {
-      return { background: "#111827" };
+      return { background: "#f8fafc" };
+    }
+
+    if (breathSync) {
+      return {
+        background: "linear-gradient(135deg, #dbeafe 0%, #e0e7ff 50%, #dbeafe 100%)",
+        transition: "background 2s ease",
+      };
     }
 
     const palette = PALETTES[emotion] || PALETTES.NEUTRAL;
@@ -37,17 +45,24 @@ export default function EmotionCanvas({ emotion, probs, isActive }: Props) {
       background: `${layers.join(", ")}, ${palette.bg}`,
       transition: "background 1.2s cubic-bezier(0.4, 0, 0.2, 1)",
     };
-  }, [emotion, probs, isActive]);
+  }, [emotion, probs, isActive, breathSync]);
 
   const orbStyle = useMemo((): React.CSSProperties => {
     if (!isActive) return { opacity: 0 };
+    if (breathSync) {
+      return {
+        opacity: 0.6,
+        background: "radial-gradient(circle, rgba(59,130,246,0.4) 0%, transparent 70%)",
+        animationDuration: "12s",
+      };
+    }
     const palette = PALETTES[emotion] || PALETTES.NEUTRAL;
     return {
       opacity: 1,
       background: `radial-gradient(circle, ${palette.glow1} 0%, transparent 70%)`,
       animationDuration: emotion === "HAPPY" ? "3s" : emotion === "SAD" ? "6s" : emotion === "ANGRY" ? "1.5s" : "4s",
     };
-  }, [emotion, isActive]);
+  }, [emotion, isActive, breathSync]);
 
   return (
     <div className="emotion-canvas" style={style}>

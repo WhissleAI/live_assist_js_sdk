@@ -31,7 +31,7 @@ export default function TranscriptPanel({ transcript }: Props) {
           <div key={seg.id} className={`transcript-seg transcript-seg--${seg.speaker}`}>
             <div className="transcript-seg-header">
               <span className={`transcript-speaker transcript-speaker--${seg.speaker}`}>
-                {seg.speaker === "child" ? "Child" : "Other"}
+                {seg.speaker === "child" ? "Child" : seg.speaker === "agent" ? "Buddy" : "Other"}
               </span>
               {isNotNeutral && (
                 <span className="transcript-emotion" style={{ color: emotionColor, borderColor: emotionColor }}>

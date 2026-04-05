@@ -12,6 +12,7 @@ const TYPE_ICONS: Record<string, string> = {
   topic: "🏷️",
   speaker_change: "🔄",
   question: "❓",
+  concern: "⚠️",
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -19,6 +20,7 @@ const TYPE_LABELS: Record<string, string> = {
   topic: "New topic",
   speaker_change: "Speaker changed",
   question: "Question asked",
+  concern: "Flagged concern",
 };
 
 function formatTime(ms: number): string {

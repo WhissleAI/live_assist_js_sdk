@@ -37,6 +37,32 @@ export interface BehavioralProfile {
   segmentCount: number;
 }
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+  confidence: number;
+  filler?: boolean;
+}
+
+export interface PauseEvent {
+  start: number;
+  end: number;
+  duration: number;
+  type: "short" | "long";
+}
+
+export interface SpeechRate {
+  words_per_minute: number;
+  articulation_rate_wpm: number;
+  word_count: number;
+  duration_sec: number;
+  pause_count: number;
+  total_pause_sec: number;
+  filler_count: number;
+  filler_rate: number;
+}
+
 export interface StreamTranscriptSegment {
   channel: string;
   text: string;
@@ -59,6 +85,14 @@ export interface StreamTranscriptSegment {
   speakerChange?: boolean;
   speakerEmbedding?: number[];
   utterance_end?: boolean;
+  /** Per-word timestamps with confidence from CTC frame positions. */
+  words?: WordTimestamp[];
+  /** Detected pauses between words (gaps >= 150ms). */
+  pauses?: PauseEvent[];
+  /** Speech rate metrics for this segment. */
+  speech_rate?: SpeechRate;
+  /** Inter-word intervals in seconds between consecutive word pairs. */
+  iwi?: number[];
 }
 
 export interface AsrStreamConfig {
@@ -71,6 +105,10 @@ export interface AsrStreamConfig {
   ptt_mode?: boolean;
   hotwords?: string[];
   hotwordWeight?: number;
+  /** Enable per-word timestamps, pause detection, and speech rate. */
+  wordTimestamps?: boolean;
+  /** Neuropsych test mode — auto-enables wordTimestamps + hotword boosting. */
+  neuropsychMode?: string;
 }
 
 export interface LiveAssistFeedback {

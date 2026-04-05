@@ -1,39 +1,45 @@
-# Voice Agent — standalone lightweight container
-# Builds the Vite app and serves it with nginx.
-#
-# Build (from live_assist_js_sdk root):
-#   docker build -f examples/voice-agent/Dockerfile -t voice-agent .
-#
-# Run (alongside the existing whissle container for ASR):
-#   docker run -d -p 5174:80 --name voice-agent voice-agent
+## Context MUST be live_assist_js_sdk (the folder that contains packages/ and examples/).
+##
+## Option A — cwd = live_assist_js_sdk:
+##   docker build --platform linux/amd64 -f examples/voice-agent/Dockerfile -t whissle-studio:local .
+##
+## Option B — cwd = examples/voice-agent (this folder):
+##   docker build --platform linux/amd64 -f Dockerfile -t whissle-studio:local ../..
+##
+## Wrong (your shell was here): using -f examples/voice-agent/Dockerfile with context "."
+## → fails: no "examples" path, and COPY packages/core would be wrong.
 
-# ── Stage 1: Build ──
 FROM node:20-slim AS builder
-WORKDIR /build
-COPY tsconfig.base.json tsconfig.base.json
-COPY packages/core packages/core
-COPY examples/voice-agent examples/voice-agent
-COPY public public
-WORKDIR /build/examples/voice-agent
-RUN npm install && npx vite build
 
-# ── Stage 2: Serve with nginx ──
-FROM nginx:alpine
-COPY --from=builder /build/examples/voice-agent/dist /usr/share/nginx/html
-COPY examples/voice-agent/public/audio-capture-processor.js /usr/share/nginx/html/audio-capture-processor.js
+ARG VITE_GATEWAY_URL=https://api.whissle.ai
+ARG VITE_CARTESIA_API_KEY
+ARG VITE_CARTESIA_VOICE_ID
+ARG VITE_CARTESIA_MODEL_ID
+ARG VITE_APP_TITLE="Whissle Studio"
 
-# SPA fallback: serve index.html for all non-file routes
-RUN printf 'server {\n\
-    listen 80;\n\
-    root /usr/share/nginx/html;\n\
-    index index.html;\n\
-    location / {\n\
-        try_files $uri $uri/ /index.html;\n\
-    }\n\
-    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|mjs)$ {\n\
-        expires 1y;\n\
-        add_header Cache-Control "public, immutable";\n\
-    }\n\
-}\n' > /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-EXPOSE 80
+# Core tsconfig extends ../../tsconfig.base.json → /app/tsconfig.base.json
+COPY tsconfig.base.json ./
+
+# 1) @whissle/live-assist-core (must have dist/ before voice-agent npm ci)
+COPY packages/core ./packages/core
+RUN cd packages/core && npm install && npm run build
+
+# 2) voice-agent SPA (lockfile expects ../../packages/core → /app/packages/core)
+WORKDIR /app/examples/voice-agent
+COPY examples/voice-agent/package.json examples/voice-agent/package-lock.json ./
+COPY examples/voice-agent/ ./
+RUN VITE_GATEWAY_URL=${VITE_GATEWAY_URL} \
+    VITE_CARTESIA_API_KEY=${VITE_CARTESIA_API_KEY} \
+    VITE_CARTESIA_VOICE_ID=${VITE_CARTESIA_VOICE_ID} \
+    VITE_CARTESIA_MODEL_ID=${VITE_CARTESIA_MODEL_ID} \
+    VITE_APP_TITLE=${VITE_APP_TITLE} \
+    npm ci && npm run build
+
+## Stage 2: Serve with nginx
+FROM nginx:1.27-alpine
+COPY examples/voice-agent/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/examples/voice-agent/dist /usr/share/nginx/html
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]

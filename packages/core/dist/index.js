@@ -7,4 +7,5 @@ export { MicCapture } from "./capture/micCapture";
 export { AudioRecorder } from "./audioRecorder";
 export { TabCapture } from "./capture/tabCapture";
 export { saveSession, listSessions } from "./sessionStore";
+export { computeRmsWindows } from "./rms";
 //# sourceMappingURL=index.js.map

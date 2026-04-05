@@ -35,6 +35,11 @@ class LiveAssistContext:
     voice_profile_summary: Optional[str] = None
     entities: List[Dict[str, str]] = field(default_factory=list)
     agenda_items: Optional[List[Dict[str, Any]]] = None
+    extra_data: Optional[Dict[str, Any]] = None
+
+
+def _is_neuropsych_context(context: LiveAssistContext) -> bool:
+    return context.mode == "neuropsych" or bool((context.extra_data or {}).get("test_type"))
 
 
 @dataclass
@@ -157,6 +162,17 @@ async def generate_feedback_node(state: LiveAssistState) -> AsyncGenerator[Dict[
             intent_ctx = "\nIntent signals (use to refine agenda confidence): " + "; ".join(parts)
     instruction = (context.custom_prompt or "You are a live-assist companion providing real-time conversation feedback. Be concise and actionable.").strip()
 
+    documents_ctx = ""
+    if context.documents_payload:
+        doc_parts = []
+        for doc in context.documents_payload:
+            title = doc.get("name") or doc.get("title") or "Document"
+            content = doc.get("content", "")
+            if content:
+                doc_parts.append(f"[{title}]:\n{content}")
+        if doc_parts:
+            documents_ctx = "\n\n--- ATTACHED DOCUMENTS ---\n" + "\n\n".join(doc_parts) + "\n--- END DOCUMENTS ---"
+
     agenda_instruction = ""
     if context.agenda_items:
         agenda_lines = "\n".join(
@@ -185,7 +201,7 @@ Transcript: {state['transcript']}
 Mode: {context.mode}
 Engagement: {status.engagement_score}/10
 Sentiment: {status.sentiment_trend}
-{personality_ctx}{intent_ctx}
+{personality_ctx}{intent_ctx}{documents_ctx}
 
 Relevant Memories:
 {memory_context or "(none)"}
@@ -202,7 +218,7 @@ Transcript: {state['transcript']}
 Mode: {context.mode}
 Engagement: {status.engagement_score}/10
 Sentiment: {status.sentiment_trend}
-{personality_ctx}{intent_ctx}
+{personality_ctx}{intent_ctx}{documents_ctx}
 
 Relevant Memories:
 {memory_context or "(none)"}
@@ -368,6 +384,26 @@ async def store_memories_node(state: LiveAssistState) -> LiveAssistState:
 
 class LiveAssistWorkflow:
     async def process_streaming(self, transcript: str, context: LiveAssistContext, gemini_api_key: Optional[str] = None) -> AsyncGenerator[str, None]:
+        if _is_neuropsych_context(context):
+            from .neuropsych_service import stream_neuropsych_scoring
+            ed = context.extra_data or {}
+            body: Dict[str, Any] = {
+                "test_type": ed.get("test_type"),
+                "transcript": transcript,
+                "words": ed.get("words", []),
+                "pauses": ed.get("pauses", []),
+                "speech_rate": ed.get("speech_rate"),
+                "patient": ed.get("patient") or {},
+                "duration_sec": ed.get("duration_sec"),
+                "target_sequence": ed.get("target_sequence"),
+                "target_word": ed.get("target_word"),
+                "cue_level": ed.get("cue_level", "none"),
+                "response_latency_sec": ed.get("response_latency_sec", 0.0),
+            }
+            async for chunk in stream_neuropsych_scoring(body):
+                yield chunk
+            return
+
         state: LiveAssistState = {
             "transcript": transcript, "context": context,
             "extracted_memories": [], "action_items": [],

@@ -9,8 +9,10 @@ export { TabCapture } from "./capture/tabCapture";
 export type { LiveAssistConfig } from "./config";
 export { saveSession, listSessions } from "./sessionStore";
 export type { StoredSession } from "./sessionStore";
+export { computeRmsWindows } from "./rms";
 export type {
   TranscriptEntry, AgendaItem, BehavioralProfile, StreamTranscriptSegment,
   AsrStreamConfig, LiveAssistFeedback, LiveAssistDone, LiveAssistStatus,
   LiveAssistMemoryItem, LiveAssistCallbacks, AgendaStatusItem, SessionReport, AttachedDoc,
+  WordTimestamp, PauseEvent, SpeechRate,
 } from "./types";

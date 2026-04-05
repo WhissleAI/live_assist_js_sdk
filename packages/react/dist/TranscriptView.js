@@ -540,6 +540,7 @@ function TranscriptBubble({ entry }) {
     const hasEmotion = !!entry.metadata?.emotion && entry.metadata.emotion.toUpperCase() !== "NEUTRAL";
     const intent = entry.metadata?.intent;
     const hasIntent = !!intent && intent !== "NEUTRAL" && intent !== "ACKNOWLEDGE";
+    const hasAgendaHL = (entry.agendaHighlights?.length ?? 0) > 0;
     return (_jsxs("div", { style: {
             display: "flex",
             flexDirection: "column",
@@ -554,11 +555,21 @@ function TranscriptBubble({ entry }) {
                     fontSize: 12,
                     lineHeight: 1.45,
                     ...(isYou ? { borderBottomLeftRadius: 3 } : { borderBottomRightRadius: 3 }),
-                    ...(hasEmotion ? { borderLeft: `3px solid ${emotionColor}` } : {}),
+                    ...(hasAgendaHL
+                        ? { borderLeft: "3px solid #22c55e" }
+                        : hasEmotion ? { borderLeft: `3px solid ${emotionColor}` } : {}),
                 }, children: [_jsx("div", { style: { fontSize: 9, fontWeight: 600, marginBottom: 1, opacity: 0.8, textTransform: "uppercase", letterSpacing: "0.04em" }, children: isYou ? "You" : "Other" }), _jsx("span", { style: {
                             opacity: isPartial ? 0.85 : 1,
                             fontStyle: isPartial ? "italic" : "normal",
-                        }, children: entry.text })] }), hasIntent && (_jsxs("span", { style: {
+                        }, children: entry.text }), hasAgendaHL && (_jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4 }, children: entry.agendaHighlights.map((h) => (_jsxs("span", { style: {
+                                fontSize: 8,
+                                fontWeight: 600,
+                                color: "#22c55e",
+                                background: "rgba(34,197,94,0.15)",
+                                padding: "1px 5px",
+                                borderRadius: 3,
+                                whiteSpace: "nowrap",
+                            }, children: ["\u25CF ", h.itemTitle, " +", h.confidenceDelta, "%"] }, h.itemId))) }))] }), hasIntent && (_jsxs("span", { style: {
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 3,

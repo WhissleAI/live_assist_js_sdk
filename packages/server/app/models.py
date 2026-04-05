@@ -28,6 +28,7 @@ class ProcessStreamRequest(BaseModel):
     intent_signals: Optional[Dict[str, Dict[str, float]]] = None  # { user: {intent: prob}, other: {...} }
     voice_profile_summary: Optional[str] = None
     entities: Optional[List[Dict[str, str]]] = None
+    extra_data: Optional[Dict[str, Any]] = Field(default=None, description="Optional structured data for specialized modes (e.g. neuropsych test data)")
 
 
 class SessionStartRequest(BaseModel):

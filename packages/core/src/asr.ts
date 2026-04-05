@@ -97,6 +97,10 @@ export class AsrStreamClient {
               speakerChange: (msg.speakerChange as boolean) ?? false,
               speakerEmbedding: Array.isArray(msg.speakerEmbedding) ? msg.speakerEmbedding as number[] : undefined,
               utterance_end: (msg.utterance_end as boolean) ?? false,
+              words: Array.isArray(msg.words) ? msg.words as StreamTranscriptSegment["words"] : undefined,
+              pauses: Array.isArray(msg.pauses) ? msg.pauses as StreamTranscriptSegment["pauses"] : undefined,
+              speech_rate: msg.speech_rate as StreamTranscriptSegment["speech_rate"],
+              iwi: Array.isArray(msg.iwi) ? msg.iwi as number[] : undefined,
             };
             if (seg.text) console.log("[LiveAssist] ASR transcript:", seg.text, seg.is_final ? "(final)" : "(partial)");
             if (this.state === "closing") this.pendingEnd.push(seg);
@@ -167,6 +171,8 @@ export class AsrStreamClient {
         hotwords: this.cfg.hotwords,
         hotword_weight: this.cfg.hotwordWeight ?? 10.0,
       } : {}),
+      ...(this.cfg.wordTimestamps ? { word_timestamps: true } : {}),
+      ...(this.cfg.neuropsychMode ? { neuropsych_mode: this.cfg.neuropsychMode } : {}),
     }));
   }
 

@@ -287,6 +287,29 @@ Override CSS variables to match your brand:
 }
 ```
 
+## Publishing npm packages (maintainers)
+
+The workspace ships two libraries: **`@whissle/live-assist-core`** and **`@whissle/live-assist-react`**. Publish **core first**, then react (react depends on the published core version).
+
+**Prerequisites:** npm login with permission to publish the `@whissle` scope (npmjs.com or your org registry). For a private registry, set `publishConfig.registry` in each package’s `package.json` and use `.npmrc` for auth.
+
+**Steps:**
+
+```bash
+cd live_assist_js_sdk
+npm ci
+npm run build
+
+# Dry run (optional)
+npm publish -w @whissle/live-assist-core --dry-run
+npm publish -w @whissle/live-assist-react --dry-run
+
+npm publish -w @whissle/live-assist-core
+npm publish -w @whissle/live-assist-react
+```
+
+After a version bump, commit updated `package.json` files and tag if your release process requires it.
+
 ## Development
 
 ```bash

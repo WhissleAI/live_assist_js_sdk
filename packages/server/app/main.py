@@ -15,6 +15,7 @@ from .routes.live_assist import router as live_assist_router
 from .routes.voice_agent import router as voice_agent_router
 from .routes.tts_proxy import router as tts_proxy_router
 from .routes.asr_proxy import router as asr_proxy_router
+from .routes.neuropsych_router import router as neuropsych_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
 log = logging.getLogger("live-assist")
@@ -34,6 +35,7 @@ app.include_router(live_assist_router)
 app.include_router(voice_agent_router)
 app.include_router(tts_proxy_router)
 app.include_router(asr_proxy_router)
+app.include_router(neuropsych_router)
 
 
 @app.get("/health")

@@ -7,9 +7,21 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     proxy: {
-      "/asr/stream": {
-        target: "ws://localhost:8001",
+      "/asr": {
+        target: "ws://localhost:9000",
         ws: true,
+      },
+      "/agent": {
+        target: "http://localhost:9000",
+        changeOrigin: true,
+      },
+      "/tts": {
+        target: "ws://localhost:9000",
+        ws: true,
+      },
+      "/health": {
+        target: "http://localhost:9000",
+        changeOrigin: true,
       },
     },
   },

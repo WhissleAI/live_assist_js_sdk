@@ -13,11 +13,18 @@ from ..live_assist_graph import LiveAssistWorkflow, LiveAssistContext
 from ..vector_memory import get_vector_memory
 from ..agents import get_agent_registry
 from ..config import settings
+from ..neuropsych_tools import get_openai_neuropsych_tool_definitions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/live-assist")
 
 workflow = LiveAssistWorkflow()
+
+
+@router.get("/tools/neuropsych")
+async def neuropsych_tool_definitions():
+    """OpenAI-format tool schemas for binding in Voice Agent, Next.js, or any client that uses function calling."""
+    return {"tools": get_openai_neuropsych_tool_definitions()}
 
 
 @router.get("/agents")
@@ -33,11 +40,27 @@ async def list_agents():
     }
 
 
+def _is_neuropsych_request(req: ProcessStreamRequest) -> bool:
+    return (
+        req.mode == "neuropsych"
+        or req.agent_id == "neuropsych_evaluator"
+        or bool((req.extra_data or {}).get("test_type"))
+    )
+
+
 @router.post("/process/stream")
 async def process_stream(req: ProcessStreamRequest, request: Request):
     """SSE streaming feedback for live conversation."""
-    if not req.transcript or len(req.transcript.strip()) < 10:
+    neuro = _is_neuropsych_request(req)
+    if not neuro and (not req.transcript or len(req.transcript.strip()) < 10):
         return JSONResponse({"error": "Transcript too short"}, status_code=400)
+    if neuro:
+        ed = req.extra_data or {}
+        if not ed.get("test_type"):
+            return JSONResponse({"error": "extra_data.test_type is required for neuropsych scoring"}, status_code=400)
+        t = (req.transcript or "").strip()
+        if len(t) < 1 and not ed.get("words"):
+            return JSONResponse({"error": "Provide transcript and/or words in extra_data"}, status_code=400)
 
     agenda_items = None
     if req.agenda_items:
@@ -69,6 +92,7 @@ async def process_stream(req: ProcessStreamRequest, request: Request):
         voice_profile_summary=req.voice_profile_summary or None,
         entities=[e for e in req.entities] if req.entities else [],
         agenda_items=agenda_items,
+        extra_data=req.extra_data,
     )
 
     async def event_stream():

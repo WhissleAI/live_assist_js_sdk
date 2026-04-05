@@ -2,6 +2,8 @@ import React, { useState, useCallback, useRef } from "react";
 import type { BehavioralProfile } from "@whissle/live-assist-core";
 import KidView from "./components/KidView";
 import ParentDashboard from "./components/ParentDashboard";
+import { gatewayConfig } from "./lib/gateway-config";
+import type { KidsMode } from "./lib/modes";
 
 export interface EmotionTimelineEntry {
   offset: number;
@@ -15,7 +17,7 @@ export interface TranscriptSegment {
   text: string;
   timestamp: number;
   isFinal: boolean;
-  speaker: "child" | "other";
+  speaker: "child" | "other" | "agent";
   emotion?: string;
   emotionConfidence?: number;
   intent?: string;
@@ -28,8 +30,19 @@ export interface Moment {
   text: string;
   emotion: string;
   emotionConfidence: number;
-  type: "emotion_peak" | "topic" | "speaker_change" | "question";
-  speaker: "child" | "other";
+  type: "emotion_peak" | "topic" | "speaker_change" | "question" | "concern";
+  speaker: "child" | "other" | "agent";
+  severity?: "low" | "medium" | "high";
+}
+
+export interface RegulationEvent {
+  id: string;
+  timestamp: number;
+  technique: string;
+  startEmotion: string;
+  endEmotion?: string;
+  durationSec?: number;
+  wasEffective?: boolean;
 }
 
 export interface SessionState {
@@ -44,42 +57,57 @@ export interface SessionState {
   speakerLabel: "child" | "other";
   error: string | null;
   sessionStart: number | null;
+  mode: KidsMode;
+  regulationEvents: RegulationEvent[];
+  flaggedConcerns: Array<{ text: string; emotion: string; severity: string; reason: string; timestamp: number }>;
+  topicsDiscussed: string[];
+  checkinData?: { overall_mood: string; highlights: string[]; concerns: string[] };
+  storyBeats: Array<{ narrator_text: string; child_prompt: string; mood: string }>;
 }
 
-function detectAsrUrl(): string {
-  const params = new URLSearchParams(window.location.search);
-  const override = params.get("asr");
-  if (override) return override;
+export interface AppSettings {
+  parentPin: string | null;
+  maxSessionMinutes: number;
+  childAge: number;
+  childName: string;
+}
 
-  const loc = typeof window !== "undefined" ? window.location : null;
-  const host = loc?.hostname || "localhost";
-  const port = loc?.port || "";
-  const wsProto = loc?.protocol === "https:" ? "wss:" : "ws:";
-  if (port === "5173" || port === "5174") {
-    return `${wsProto}//${host}:8001/asr/stream`;
-  }
-  return `${wsProto}//${loc?.host || host}/asr/stream`;
+function loadSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem("whissle_kids_settings");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { parentPin: null, maxSessionMinutes: 15, childAge: 7, childName: "" };
 }
 
 type View = "kid" | "parent";
 
+const INITIAL_SESSION: SessionState = {
+  isActive: false,
+  isConnected: false,
+  transcript: [],
+  moments: [],
+  emotionTimeline: [],
+  currentEmotion: "NEUTRAL",
+  currentEmotionProbs: {},
+  profile: null,
+  speakerLabel: "child",
+  error: null,
+  sessionStart: null,
+  mode: "kids_free_talk",
+  regulationEvents: [],
+  flaggedConcerns: [],
+  topicsDiscussed: [],
+  storyBeats: [],
+};
+
 export default function App() {
   const [view, setView] = useState<View>("kid");
-  const [asrUrl] = useState(detectAsrUrl);
-  const sessionRef = useRef<SessionState>({
-    isActive: false,
-    isConnected: false,
-    transcript: [],
-    moments: [],
-    emotionTimeline: [],
-    currentEmotion: "NEUTRAL",
-    currentEmotionProbs: {},
-    profile: null,
-    speakerLabel: "child",
-    error: null,
-    sessionStart: null,
-  });
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState(false);
 
+  const sessionRef = useRef<SessionState>({ ...INITIAL_SESSION });
   const [session, setSession] = useState<SessionState>(sessionRef.current);
 
   const updateSession = useCallback((patch: Partial<SessionState>) => {
@@ -88,16 +116,65 @@ export default function App() {
     setSession(next);
   }, []);
 
-  const toggleView = useCallback(() => {
-    setView((v) => (v === "kid" ? "parent" : "kid"));
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      localStorage.setItem("whissle_kids_settings", JSON.stringify(next));
+      return next;
+    });
   }, []);
+
+  const handleViewToggle = useCallback(() => {
+    if (view === "kid" && settings.parentPin) {
+      setPinInput("");
+      setPinError(false);
+      setView("pin_check" as View);
+      return;
+    }
+    setView((v) => (v === "kid" ? "parent" : "kid"));
+  }, [view, settings.parentPin]);
+
+  const handlePinSubmit = useCallback(() => {
+    if (pinInput === settings.parentPin) {
+      setView("parent");
+      setPinError(false);
+    } else {
+      setPinError(true);
+    }
+  }, [pinInput, settings.parentPin]);
+
+  if ((view as string) === "pin_check") {
+    return (
+      <div className="app-root">
+        <div className="pin-screen">
+          <h2 className="pin-title">Parent Access</h2>
+          <p className="pin-subtitle">Enter your PIN to view the parent dashboard</p>
+          <div className="pin-input-row">
+            <input
+              type="password"
+              maxLength={4}
+              className="pin-input"
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && handlePinSubmit()}
+              placeholder="••••"
+              autoFocus
+            />
+            <button type="button" className="pin-submit" onClick={handlePinSubmit}>Go</button>
+          </div>
+          {pinError && <p className="pin-error">Wrong PIN. Try again.</p>}
+          <button type="button" className="pin-back" onClick={() => setView("kid")}>Back to Kid View</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-root">
       <button
         type="button"
         className="view-toggle"
-        onClick={toggleView}
+        onClick={handleViewToggle}
         title={view === "kid" ? "Switch to Parent View" : "Switch to Kid View"}
       >
         {view === "kid" ? (
@@ -120,14 +197,17 @@ export default function App() {
 
       {view === "kid" ? (
         <KidView
-          asrUrl={asrUrl}
+          asrUrl={gatewayConfig.asrStreamUrl}
           session={session}
           updateSession={updateSession}
           sessionRef={sessionRef}
+          settings={settings}
         />
       ) : (
         <ParentDashboard
           session={session}
+          settings={settings}
+          updateSettings={updateSettings}
         />
       )}
     </div>
