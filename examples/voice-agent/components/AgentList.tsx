@@ -4,6 +4,8 @@ import { getModelLabel } from "../lib/agent-config";
 import { deleteAgent, duplicateAgent } from "../lib/agent-store";
 import { navigate } from "../App";
 import Icon from "./Icon";
+import { confirmAction } from "./ConfirmModal";
+import { showToast } from "./Toast";
 
 interface Props {
   agents: AgentConfig[];
@@ -26,9 +28,10 @@ export default function AgentList({ agents, onRefresh }: Props) {
     );
   }
 
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`Delete "${name}"? This cannot be undone.`)) {
+  const handleDelete = async (id: string, name: string) => {
+    if (await confirmAction(`Delete "${name}"?`, "This cannot be undone.")) {
       deleteAgent(id);
+      showToast("Agent deleted", "success");
       onRefresh();
     }
   };

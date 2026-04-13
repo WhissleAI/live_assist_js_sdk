@@ -17,6 +17,10 @@ export interface StoredSession {
   moments: Moment[];
   flaggedConcerns: Array<{ text: string; emotion: string; severity: string; reason: string; timestamp: number }>;
   transcript: TranscriptSegment[];
+  /** Cached AI-generated analysis of the conversation. */
+  aiSummary?: string;
+  /** Timestamp (ms) when batch re-transcription was applied. */
+  reTranscribedAt?: number;
   // Legacy fields kept for backward compat with old localStorage data
   mode?: string;
   regulationEvents?: unknown[];
@@ -101,8 +105,8 @@ function migrateLegacy(): StoredSession[] {
     if (!Array.isArray(parsed)) return [];
     const migrated = parsed.filter(isValidSession).map((s) => ({
       ...s,
-      agentId: s.agentId || "legacy_kids",
-      agentName: s.agentName || "Kids Buddy",
+      agentId: s.agentId || "legacy",
+      agentName: s.agentName || "Agent",
       topicsDiscussed: Array.isArray(s.topicsDiscussed) ? s.topicsDiscussed : [],
       moments: Array.isArray(s.moments) ? s.moments : [],
       flaggedConcerns: Array.isArray(s.flaggedConcerns) ? s.flaggedConcerns : [],
@@ -136,6 +140,27 @@ export function loadSessions(): StoredSession[] {
     return migrateLegacy();
   } catch {}
   return [];
+}
+
+export function updateSession(sessionId: string, patch: Partial<StoredSession>): void {
+  const sessions = loadSessions();
+  const idx = sessions.findIndex((s) => s.id === sessionId);
+  if (idx < 0) return;
+  sessions[idx] = { ...sessions[idx]!, ...patch };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  } catch (e) {
+    console.warn("[SessionStore] update failed:", e);
+  }
+}
+
+export function deleteSession(sessionId: string): void {
+  const sessions = loadSessions().filter((s) => s.id !== sessionId);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  } catch (e) {
+    console.warn("[SessionStore] delete failed:", e);
+  }
 }
 
 export function clearSessions(): void {

@@ -11,8 +11,15 @@ export interface GoogleSheetsIntegration {
   sheet_name: string;
 }
 
+export interface WebhookConfig {
+  url: string;
+  events: string[];
+  secret?: string;
+}
+
 export interface AgentIntegrations {
   google_sheets?: GoogleSheetsIntegration;
+  webhook?: WebhookConfig;
 }
 
 export interface AgentConfig {

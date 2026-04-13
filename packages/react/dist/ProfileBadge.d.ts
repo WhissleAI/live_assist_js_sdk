@@ -4,5 +4,5 @@ export declare function ProfileBadge({ profile, label, align, onClick }: {
     label: string;
     align?: "left" | "right";
     onClick?: () => void;
-}): import("react/jsx-runtime").JSX.Element;
+}): any;
 //# sourceMappingURL=ProfileBadge.d.ts.map

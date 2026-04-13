@@ -102,6 +102,9 @@ export async function streamAgentRouter(
       language: cfg.language,
       integrations: (cfg as Record<string, unknown>).integrations || {},
     },
+    user_emotion: params.currentEmotion || "NEUTRAL",
+    user_emotion_confidence: params.emotionConfidence || 0,
+    // Legacy aliases — backend may still read these
     child_emotion: params.currentEmotion || "NEUTRAL",
     child_emotion_confidence: params.emotionConfidence || 0,
     // Full ASR metadata arrays — enables _build_behavioral_context on the backend
@@ -218,7 +221,8 @@ function processSSELine(line: string, cb: AgentStreamCallbacks): void {
         });
         break;
 
-      case "kids_tool":
+      case "kids_tool": // legacy event name — backend still emits this
+      case "tool_call":
         cb.onToolCall?.({
           name: parsed.name as string,
           arguments: (parsed.arguments as Record<string, unknown>) ?? {},

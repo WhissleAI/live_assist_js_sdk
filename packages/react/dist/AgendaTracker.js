@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useMemo, useRef, useEffect, useState } from "react";
+import React, { useMemo, useRef, useEffect, useState } from "react";
 const STATUS_ICON = { pending: "○", in_progress: "◑", completed: "●", skipped: "—" };
 const STATUS_COLOR = { pending: "#9ca3af", in_progress: "var(--la-primary, #124e3f)", completed: "#22c55e", skipped: "#f59e0b" };
 const SENTIMENT_COLOR = { positive: "#22c55e", neutral: "#6b7280", negative: "#ef4444", mixed: "#f59e0b" };

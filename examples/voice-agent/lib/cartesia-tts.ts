@@ -165,6 +165,12 @@ export class CartesiaTtsClient {
 
   private pcmTapCallback: ((pcm: Int16Array) => void) | null = null;
 
+  /** Running peak tracker for PCM normalization (exponential decay). */
+  private runningPeak = 0.3;
+
+  /** Target gain level after normalization — higher on mobile for louder output. */
+  private readonly targetGain: number;
+
   onSpeakingChange: ((speaking: boolean) => void) | null = null;
   onError: ((err: Error) => void) | null = null;
 
@@ -172,6 +178,10 @@ export class CartesiaTtsClient {
     this.config = config;
     this.sampleRate = config.sampleRate ?? DEFAULT_SAMPLE_RATE;
     this.modelId = config.modelId ?? DEFAULT_MODEL;
+    // Mobile browsers (Android/iOS) output Web Audio at lower hardware levels;
+    // compensate with a higher software gain target.
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    this.targetGain = isMobile ? 4.5 : 3.5;
   }
 
   get connected() {
@@ -200,8 +210,8 @@ export class CartesiaTtsClient {
 
   setRecorderDestination(node: AudioNode): void {
     this.recorderNode = node;
-    if (this.compressorNode) {
-      this.compressorNode.connect(node);
+    if (this.gainNode) {
+      this.gainNode.connect(node);
     }
   }
 
@@ -213,17 +223,26 @@ export class CartesiaTtsClient {
 
   private async ensureAudioContext(): Promise<AudioContext> {
     if (!this.audioCtx) {
-      this.audioCtx = new AudioCtx({ sampleRate: this.sampleRate });
+      // Let the browser pick its native sample rate — forcing 22050 causes volume
+      // and quality issues on Android Chrome (native rate is typically 48000).
+      // The resampling code in handleAudioChunk() handles the conversion.
+      this.audioCtx = new AudioCtx();
 
-      this.gainNode = this.audioCtx.createGain();
-      this.gainNode.gain.value = 2.8;
-
+      // Compressor acts as a gentle limiter to tame peaks BEFORE the gain stage.
+      // Threshold -6 dB means most of the signal passes through untouched;
+      // only loud spikes get attenuated, preventing distortion after gain boost.
       this.compressorNode = this.audioCtx.createDynamicsCompressor();
-      this.compressorNode.threshold.value = -20;
+      this.compressorNode.threshold.value = -6;
       this.compressorNode.knee.value = 10;
-      this.compressorNode.ratio.value = 6;
-      this.compressorNode.attack.value = 0.003;
-      this.compressorNode.release.value = 0.1;
+      this.compressorNode.ratio.value = 4;
+      this.compressorNode.attack.value = 0.002;
+      this.compressorNode.release.value = 0.08;
+
+      // Gain AFTER the compressor — the previous order (gain → compressor)
+      // boosted the signal by 2.8x then immediately compressed it back down,
+      // wasting the boost. Post-compressor gain provides the actual volume lift.
+      this.gainNode = this.audioCtx.createGain();
+      this.gainNode.gain.value = this.targetGain;
 
       this.analyserNode = this.audioCtx.createAnalyser();
       this.analyserNode.fftSize = 256;
@@ -232,13 +251,13 @@ export class CartesiaTtsClient {
       this.processor = this.audioCtx.createScriptProcessor(PROC_BUFFER, 0, 1);
       this.processor.onaudioprocess = (e) => this.processAudio(e);
 
-      // Audio graph: processor -> gain -> compressor -> analyser -> destination
-      this.processor.connect(this.gainNode);
-      this.gainNode.connect(this.compressorNode);
-      this.compressorNode.connect(this.analyserNode);
+      // Audio graph: processor → compressor (limiter) → gain (volume boost) → analyser → destination
+      this.processor.connect(this.compressorNode);
+      this.compressorNode.connect(this.gainNode);
+      this.gainNode.connect(this.analyserNode);
       this.analyserNode.connect(this.audioCtx.destination);
       if (this.recorderNode) {
-        this.compressorNode.connect(this.recorderNode);
+        this.gainNode.connect(this.recorderNode);
       }
     }
     if (this.audioCtx.state === "suspended") {
@@ -260,7 +279,11 @@ export class CartesiaTtsClient {
 
     const toRead = Math.min(avail, output.length);
     for (let i = 0; i < toRead; i++) {
-      output[i] = this.ring[this.ringRead];
+      let s = this.ring[this.ringRead];
+      // Soft-clip (tanh) to prevent harsh digital clipping after gain boost.
+      // Values in [-1,1] pass nearly unchanged; values beyond get smoothly capped.
+      if (s > 1 || s < -1) s = Math.tanh(s);
+      output[i] = s;
       this.ringRead = (this.ringRead + 1) % RING_SIZE;
     }
     for (let i = toRead; i < output.length; i++) {
@@ -487,6 +510,37 @@ export class CartesiaTtsClient {
 
     const float32 = new Float32Array(bytes.buffer);
 
+    // ── PCM normalization ──────────────────────────────────────────
+    // TTS output is often well below full-scale. Track the running peak
+    // with exponential smoothing and apply gain to bring the signal up
+    // to a target level (~0.85) before it hits the audio graph.
+    // This ensures consistent volume regardless of Cartesia output level.
+    const TARGET_PEAK = 0.85;
+    const PEAK_ATTACK = 0.3;   // fast rise to catch loud chunks
+    const PEAK_RELEASE = 0.005; // slow decay to avoid pumping
+    const MAX_NORM_GAIN = 6;   // cap to prevent amplifying silence/noise
+
+    let chunkPeak = 0;
+    for (let i = 0; i < float32.length; i++) {
+      const abs = Math.abs(float32[i]);
+      if (abs > chunkPeak) chunkPeak = abs;
+    }
+
+    if (chunkPeak > 0.01) {
+      // Update running peak: fast attack (louder chunks raise it quickly),
+      // slow release (keeps volume stable during pauses between words).
+      const alpha = chunkPeak > this.runningPeak ? PEAK_ATTACK : PEAK_RELEASE;
+      this.runningPeak = this.runningPeak + alpha * (chunkPeak - this.runningPeak);
+    }
+
+    const normGain = Math.min(TARGET_PEAK / Math.max(this.runningPeak, 0.01), MAX_NORM_GAIN);
+    if (normGain > 1.05 || normGain < 0.95) {
+      for (let i = 0; i < float32.length; i++) {
+        float32[i] *= normGain;
+      }
+    }
+
+    // ── Resample to AudioContext rate ────────────────────────────────
     const ctxRate = this.audioCtx.sampleRate;
     let samples = float32;
 
@@ -529,7 +583,7 @@ export class CartesiaTtsClient {
     this._muted = false;
     if (this.gainNode && this.audioCtx) {
       this.gainNode.gain.cancelScheduledValues(this.audioCtx.currentTime);
-      this.gainNode.gain.linearRampToValueAtTime(2.8, this.audioCtx.currentTime + 0.1);
+      this.gainNode.gain.linearRampToValueAtTime(this.targetGain, this.audioCtx.currentTime + 0.1);
     }
   }
 
@@ -609,6 +663,7 @@ export class CartesiaTtsClient {
     this.ringWrite = 0;
     this.wasPlaying = false;
     this.speakCount = 0;
+    this.runningPeak = 0.3;
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);
       this.silenceTimer = null;

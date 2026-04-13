@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { useLiveAssist } from "./LiveAssistProvider";
 import { TranscriptView } from "./TranscriptView";
 import { SessionControls } from "./SessionControls";

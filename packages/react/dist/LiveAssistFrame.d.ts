@@ -7,5 +7,5 @@ export declare function LiveAssistFrame({ agenda, agentId, mode, style, classNam
     mode?: string;
     style?: React.CSSProperties;
     className?: string;
-}): import("react/jsx-runtime").JSX.Element;
+}): any;
 //# sourceMappingURL=LiveAssistFrame.d.ts.map

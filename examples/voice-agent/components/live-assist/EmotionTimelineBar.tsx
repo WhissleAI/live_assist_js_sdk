@@ -421,6 +421,28 @@ export function EmotionTimelineBar({
     });
   }, [currentTimeSec, isPlaying, playheadDur, tapeWidthPx, zoom]);
 
+  /** Scroll to playhead on seek (large jump) even when not playing. */
+  const prevTimeRef = useRef(currentTimeSec);
+  useEffect(() => {
+    const prev = prevTimeRef.current;
+    prevTimeRef.current = currentTimeSec;
+    if (isPlaying) return; // handled by the auto-scroll above
+    const delta = Math.abs(currentTimeSec - prev);
+    if (delta < 0.5) return; // ignore tiny updates
+    const el = scrollRef.current;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    const dur = playheadDur;
+    if (dur <= 0) return;
+    const ratio = Math.min(1, Math.max(0, currentTimeSec / dur));
+    const playheadPx = ratio * el.scrollWidth;
+    const target = playheadPx - el.clientWidth * 0.4;
+    requestAnimationFrame(() => {
+      const box = scrollRef.current;
+      if (!box) return;
+      box.scrollTo({ left: Math.max(0, Math.min(target, box.scrollWidth - box.clientWidth)), behavior: "smooth" });
+    });
+  }, [currentTimeSec, isPlaying, playheadDur]);
+
   const usedKeys = useMemo(() => {
     const s = new Set<string>();
     for (const sp of spans) {

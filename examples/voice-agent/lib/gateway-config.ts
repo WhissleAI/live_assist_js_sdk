@@ -1,5 +1,5 @@
 /**
- * Centralized gateway configuration for kids_assist.
+ * Centralized gateway configuration for Whissle Studio.
  *
  * In production, all requests go directly to api.whissle.ai.
  * In dev, Vite proxies /asr, /agent, /tts to localhost:9000 (gateway).
@@ -12,10 +12,6 @@ import { getDeviceId } from "./device-id";
 const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL as string | undefined;
 
 function detectGatewayBase(): string {
-  const params = new URLSearchParams(window.location.search);
-  const override = params.get("gateway");
-  if (override) return override.replace(/\/+$/, "");
-
   if (GATEWAY_URL) return GATEWAY_URL.replace(/\/+$/, "");
 
   const loc = window.location;

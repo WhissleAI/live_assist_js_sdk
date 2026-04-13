@@ -45,6 +45,10 @@ interface UseVoiceAgentOpts {
   onAgentUtterance?: (utterance: AgentUtterance) => void;
   /** Fires when the agent begins a new streamed reply (after user message / interrupt). */
   onAgentTurnWallStart?: () => void;
+  /** Fires with the backend conversation_id when the agent stream completes. */
+  onConversationId?: (id: string) => void;
+  /** Fires when the agent stores memory items about the user. */
+  onMemory?: (items: string[]) => void;
 }
 
 interface ConversationTurn {
@@ -90,6 +94,8 @@ export function useVoiceAgent({
   onStep,
   onAgentUtterance,
   onAgentTurnWallStart,
+  onConversationId,
+  onMemory,
 }: UseVoiceAgentOpts) {
   const [agentText, setAgentText] = useState("");
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -115,6 +121,8 @@ export function useVoiceAgent({
   const onStepRef = useRef(onStep);
   const onAgentUtteranceRef = useRef(onAgentUtterance);
   const onAgentTurnWallStartRef = useRef(onAgentTurnWallStart);
+  const onConversationIdRef = useRef(onConversationId);
+  const onMemoryRef = useRef(onMemory);
 
   agentConfigRef.current = agentConfig;
   emotionRef.current = currentEmotion;
@@ -129,6 +137,8 @@ export function useVoiceAgent({
   onStepRef.current = onStep;
   onAgentUtteranceRef.current = onAgentUtterance;
   onAgentTurnWallStartRef.current = onAgentTurnWallStart;
+  onConversationIdRef.current = onConversationId;
+  onMemoryRef.current = onMemory;
 
   const initTts = useCallback(async () => {
     if (ttsRef.current) {
@@ -287,9 +297,13 @@ export function useVoiceAgent({
       onToolCall: (ev) => {
         onToolCallRef.current?.(ev);
       },
-      onDone: () => {
+      onMemory: (items) => {
+        onMemoryRef.current?.(items);
+      },
+      onDone: (_summary, conversationId) => {
         if (ttsRef.current) ttsRef.current.flush();
         setIsProcessing(false);
+        if (conversationId) onConversationIdRef.current?.(conversationId);
 
         const finalText = pendingAgentTextRef.current.trim();
         if (finalText) {

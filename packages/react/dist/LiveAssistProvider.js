@@ -1,5 +1,5 @@
 import { jsx as _jsx } from "react/jsx-runtime";
-import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { getStoredInstructions } from "./InstructionsModal";
 import { LiveAssistSession } from "@whissle/live-assist-core";
 const emptyProfile = { emotionProfile: {}, intentProfile: {}, segmentCount: 0 };

@@ -1,14 +1,15 @@
-import React, { useState, useMemo } from "react";
-import { loadSessions } from "../lib/session-store";
+import React, { useState, useMemo, useCallback } from "react";
+import { loadSessions, deleteSession } from "../lib/session-store";
+import { deleteAudio } from "../lib/audio-store";
 import { loadAgents } from "../lib/agent-store";
 import { navigate } from "../App";
 import type { StoredSession } from "../lib/session-store";
+import { EMOTION_COLORS } from "../lib/transcriptEmotion";
 import Icon from "./Icon";
+import { confirmAction } from "./ConfirmModal";
+import { showToast } from "./Toast";
 
-const EMOTION_COLORS: Record<string, string> = {
-  HAPPY: "#facc15", SAD: "#3b82f6", ANGRY: "#ef4444", FEAR: "#8b5cf6",
-  SURPRISE: "#f97316", DISGUST: "#22c55e", NEUTRAL: "#9ca3af",
-};
+const PAGE_SIZE = 12;
 
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -26,13 +27,26 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
+function exportSessions() {
+  const data = JSON.stringify(loadSessions(), null, 2);
+  const blob = new Blob([data], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `whissle-sessions-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function SessionsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const sessions = useMemo(() => loadSessions(), [refreshKey]);
   const agents = useMemo(() => loadAgents(), [refreshKey]);
 
+  const [searchQuery, setSearchQuery] = useState("");
   const [filterAgent, setFilterAgent] = useState("all");
   const [filterDate, setFilterDate] = useState("");
+  const [page, setPage] = useState(0);
 
   const uniqueAgents = useMemo(() => {
     const map = new Map<string, string>();
@@ -44,6 +58,12 @@ export default function SessionsPage() {
 
   const filtered = useMemo(() => {
     let result = [...sessions].reverse();
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter((s) =>
+        s.transcript.some((seg) => seg.text.toLowerCase().includes(q))
+      );
+    }
     if (filterAgent !== "all") {
       result = result.filter((s) => s.agentId === filterAgent);
     }
@@ -54,7 +74,25 @@ export default function SessionsPage() {
       });
     }
     return result;
-  }, [sessions, filterAgent, filterDate]);
+  }, [sessions, searchQuery, filterAgent, filterDate]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageSlice = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  const handleDelete = useCallback(async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!(await confirmAction("Delete session?", "This cannot be undone."))) return;
+    deleteSession(sessionId);
+    deleteAudio(sessionId).catch(() => {});
+    showToast("Session deleted", "success");
+    setRefreshKey((k) => k + 1);
+  }, []);
+
+  // Reset page when filters change
+  const handleFilterAgent = useCallback((val: string) => { setFilterAgent(val); setPage(0); }, []);
+  const handleFilterDate = useCallback((val: string) => { setFilterDate(val); setPage(0); }, []);
+  const handleSearch = useCallback((val: string) => { setSearchQuery(val); setPage(0); }, []);
 
   return (
     <div className="studio-page">
@@ -71,8 +109,19 @@ export default function SessionsPage() {
         </div>
       ) : (
         <>
+          <div className="sessions-search-bar">
+            <span className="sessions-search-icon"><Icon name="search" size={16} /></span>
+            <input
+              type="text"
+              className="sessions-search-input"
+              placeholder="Search transcripts..."
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+            />
+          </div>
+
           <div className="sessions-filter-bar">
-            <select value={filterAgent} onChange={(e) => setFilterAgent(e.target.value)}>
+            <select value={filterAgent} onChange={(e) => handleFilterAgent(e.target.value)}>
               <option value="all">All Agents</option>
               {uniqueAgents.map(([id, name]) => (
                 <option key={id} value={id}>{name}</option>
@@ -81,35 +130,66 @@ export default function SessionsPage() {
             <input
               type="date"
               value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
+              onChange={(e) => handleFilterDate(e.target.value)}
               placeholder="Filter by date"
             />
-            {(filterAgent !== "all" || filterDate) && (
+            {(filterAgent !== "all" || filterDate || searchQuery) && (
               <button
                 type="button"
                 className="btn btn--ghost btn--small"
-                onClick={() => { setFilterAgent("all"); setFilterDate(""); }}
+                onClick={() => { handleFilterAgent("all"); handleFilterDate(""); handleSearch(""); }}
               >
                 Clear filters
               </button>
             )}
+            <button
+              type="button"
+              className="btn btn--ghost btn--small sessions-export-btn"
+              onClick={exportSessions}
+            >
+              <Icon name="download" size={14} /> Export
+            </button>
             <span className="sessions-filter-count">
               {filtered.length} session{filtered.length !== 1 ? "s" : ""}
             </span>
           </div>
 
           <div className="session-card-grid">
-            {filtered.map((s) => (
-              <SessionCard key={s.id} session={s} />
+            {pageSlice.map((s) => (
+              <SessionCard key={s.id} session={s} onDelete={handleDelete} />
             ))}
           </div>
+
+          {totalPages > 1 && (
+            <div className="sessions-pagination">
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                disabled={safePage === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <Icon name="chevron-left" size={14} /> Prev
+              </button>
+              <span className="sessions-pagination-info">
+                Page {safePage + 1} of {totalPages}
+              </span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                disabled={safePage >= totalPages - 1}
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              >
+                Next <Icon name="chevron-right" size={14} />
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function SessionCard({ session }: { session: StoredSession }) {
+function SessionCard({ session, onDelete }: { session: StoredSession; onDelete: (id: string, e: React.MouseEvent) => void }) {
   const emoColor = EMOTION_COLORS[session.emotionSummary?.dominant] ?? "#9ca3af";
   const dominant = session.emotionSummary?.dominant ?? "NEUTRAL";
 
@@ -117,9 +197,19 @@ function SessionCard({ session }: { session: StoredSession }) {
     <div className="session-card" onClick={() => navigate(`sessions/${session.id}`)}>
       <div className="session-card-header">
         <span className="session-card-agent">{session.agentName || "Agent"}</span>
-        <span className="session-card-date">
-          {formatDate(session.date)} · {formatTime(session.date)}
-        </span>
+        <div className="session-card-actions">
+          <span className="session-card-date">
+            {formatDate(session.date)} · {formatTime(session.date)}
+          </span>
+          <button
+            type="button"
+            className="session-card-delete"
+            title="Delete session"
+            onClick={(e) => onDelete(session.id, e)}
+          >
+            <Icon name="trash" size={14} />
+          </button>
+        </div>
       </div>
       <div className="session-card-meta">
         <span>{formatDuration(session.durationSec)}</span>

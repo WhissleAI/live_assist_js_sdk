@@ -1,4 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import React from "react";
 import { EmotionDonut, getProfileSegments } from "./PersonalityChart";
 export function PersonalitySidebar({ label, profile, placeholder = "—", size = 100 }) {
     const segments = getProfileSegments(profile);

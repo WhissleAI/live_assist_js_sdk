@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useRef, useEffect, useState, useMemo, useCallback } from "react";
+import React, { useRef, useEffect, useState, useMemo, useCallback } from "react";
 const EMOTION_COLOR = {
     HAPPY: "#facc15",
     SAD: "#3b82f6",

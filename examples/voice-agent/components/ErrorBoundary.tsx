@@ -43,13 +43,13 @@ export default class ErrorBoundary extends React.Component<
             justifyContent: "center",
             height: "100vh",
             padding: 32,
-            fontFamily: "'DM Sans', system-ui, sans-serif",
+            fontFamily: "var(--font-body, 'Atkinson Hyperlegible', system-ui, sans-serif)",
             color: "#1e293b",
             background: "#f8fafc",
             textAlign: "center",
           }}
         >
-          <h1 style={{ fontSize: "1.5rem", marginBottom: 8, fontWeight: 700 }}>
+          <h1 style={{ fontSize: "1.5rem", marginBottom: 8, fontWeight: 700, fontFamily: "var(--font-display, 'Sora', system-ui, sans-serif)" }}>
             Something went wrong
           </h1>
           <p style={{ color: "#64748b", maxWidth: 420, marginBottom: 24, lineHeight: 1.5 }}>
@@ -60,7 +60,7 @@ export default class ErrorBoundary extends React.Component<
               onClick={this.handleReset}
               style={{
                 padding: "10px 20px",
-                background: "#6366f1",
+                background: "var(--color-accent, #e63946)",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,

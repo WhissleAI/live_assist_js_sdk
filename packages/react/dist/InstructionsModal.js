@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 const STORAGE_KEY = "whissle_live_assist_instructions";
 const DEFAULT = "You are a live-assist companion providing real-time conversation feedback. Be concise and actionable. Focus on key points, action items, and helpful suggestions.";
 function getStored() {

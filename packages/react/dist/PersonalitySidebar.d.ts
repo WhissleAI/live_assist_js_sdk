@@ -5,6 +5,6 @@ interface PersonalitySidebarProps {
     placeholder?: string;
     size?: number;
 }
-export declare function PersonalitySidebar({ label, profile, placeholder, size }: PersonalitySidebarProps): import("react/jsx-runtime").JSX.Element;
+export declare function PersonalitySidebar({ label, profile, placeholder, size }: PersonalitySidebarProps): any;
 export {};
 //# sourceMappingURL=PersonalitySidebar.d.ts.map

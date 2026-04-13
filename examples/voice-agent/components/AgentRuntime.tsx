@@ -14,6 +14,7 @@ import { SessionAudioRecorder } from "../lib/audio-recorder";
 import { saveAudio, uploadToGcs } from "../lib/audio-store";
 import { gatewayConfig } from "../lib/gateway-config";
 import { useTtsAnalysis } from "../hooks/useTtsAnalysis";
+import WhissleLogo from "./WhissleLogo";
 
 interface Props {
   agentId: string;
@@ -206,7 +207,7 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
     onUserSpeechEnd,
     getTtsClient,
   } = useVoiceAgent({
-    agentConfig: agentConfig!,
+    agentConfig: agentConfig ?? ({} as AgentConfig),
     currentEmotion: session.currentEmotion,
     emotionConfidence: session.currentEmotionProbs[session.currentEmotion] ?? 0,
     emotionProbs: localEmotionProbs.current,
@@ -388,7 +389,7 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
           >
             {connecting ? "Connecting..." : "Start Conversation"}
           </button>
-          <p className="runtime-powered">Powered by Whissle</p>
+          <p className="runtime-powered"><WhissleLogo size={16} /> Powered by Whissle</p>
         </div>
         {!isEmbed && (
           <button type="button" className="runtime-back-btn" onClick={() => navigate("")}>
@@ -418,6 +419,25 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
           {formatDuration(elapsed)}
         </div>
       )}
+
+      {/* Recording indicator */}
+      {session.isActive && (
+        <div className="recording-indicator" aria-live="assertive">
+          <span className="recording-indicator-dot" />
+          <span className="recording-indicator-text">Recording</span>
+        </div>
+      )}
+
+      {/* Screen reader transcript announcements */}
+      <div className="sr-only" aria-live="polite" aria-atomic="false">
+        {session.transcript.length > 0 && (
+          <p>
+            {session.transcript[session.transcript.length - 1]!.speaker === "agent" ? "Agent" : "User"}
+            {": "}
+            {session.transcript[session.transcript.length - 1]!.text}
+          </p>
+        )}
+      </div>
 
       <VoiceOrb
         analyser={ttsAnalyser}

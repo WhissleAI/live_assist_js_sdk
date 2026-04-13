@@ -29,7 +29,7 @@ interface LiveAssistContextValue {
 export declare function LiveAssistProvider({ config, children }: {
     config: LiveAssistConfig;
     children: React.ReactNode;
-}): import("react/jsx-runtime").JSX.Element;
+}): any;
 export declare function useLiveAssist(): LiveAssistContextValue;
 export {};
 //# sourceMappingURL=LiveAssistProvider.d.ts.map

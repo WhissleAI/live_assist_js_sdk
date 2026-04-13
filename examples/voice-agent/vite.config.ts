@@ -3,8 +3,15 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    minify: "esbuild",
+    // Strip console.log/warn/debug in production to avoid leaking data
+    target: "es2020",
+  },
+  esbuild: {
+    drop: process.env.NODE_ENV === "production" ? ["console", "debugger"] : [],
+  },
   server: {
-    allowedHosts: true,
     proxy: {
       "/asr": {
         target: "ws://localhost:9000",

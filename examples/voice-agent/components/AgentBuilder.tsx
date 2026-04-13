@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   createDefaultAgent,
   AGENT_TEMPLATES,
@@ -14,6 +14,15 @@ import VoicePicker from "./VoicePicker";
 import { navigate } from "../App";
 import { gatewayConfig } from "../lib/gateway-config";
 import Icon from "./Icon";
+import { showToast } from "./Toast";
+
+interface ToolDef {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category?: string;
+}
 
 interface Props {
   agentId?: string;
@@ -78,6 +87,61 @@ export default function AgentBuilder({ agentId }: Props) {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsPeriod, setAnalyticsPeriod] = useState("7d");
+  const [dynamicTools, setDynamicTools] = useState<ToolDef[]>([]);
+  const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [toolFilter, setToolFilter] = useState("");
+
+  // Fetch tools from backend, falling back to static list
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${gatewayConfig.httpBase}/agent/tools`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.tools?.length) {
+          setDynamicTools(data.tools);
+        } else {
+          setDynamicTools(AVAILABLE_TOOLS.map((t) => ({ ...t, category: "general" })));
+        }
+        setToolsLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDynamicTools(AVAILABLE_TOOLS.map((t) => ({ ...t, category: "general" })));
+          setToolsLoaded(true);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toolsByCategory = dynamicTools.reduce<Record<string, ToolDef[]>>((acc, tool) => {
+    const cat = tool.category || "general";
+    (acc[cat] ??= []).push(tool);
+    return acc;
+  }, {});
+
+  const CATEGORY_LABELS: Record<string, string> = {
+    productivity: "Productivity & Google",
+    information: "Search & Information",
+    finance: "Finance",
+    media: "Media & Creative",
+    utilities: "Utilities",
+    memory: "Memory & Context",
+    settings: "Settings",
+    safety: "Safety",
+    general: "Other",
+  };
+
+  // Warn before leaving with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!saved) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [saved]);
 
   const patch = useCallback((updates: Partial<AgentConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
@@ -124,6 +188,7 @@ export default function AgentBuilder({ agentId }: Props) {
   const handleSave = useCallback(() => {
     saveAgent(config);
     setSaved(true);
+    showToast("Agent saved", "success");
     setTimeout(() => setSaved(false), 2000);
   }, [config]);
 
@@ -389,26 +454,83 @@ export default function AgentBuilder({ agentId }: Props) {
                   <textarea className="field-textarea field-textarea--large" value={config.knowledgeContext} onChange={(e) => patch({ knowledgeContext: e.target.value })} placeholder="Our company sells... Our return policy is... Common questions include..." rows={20} />
                   <span className="field-hint">{config.knowledgeContext.length} characters</span>
                 </label>
+                <div className="field">
+                  <span className="field-label">Upload File</span>
+                  <p className="field-hint" style={{ marginBottom: "var(--space-2)" }}>Upload a text, markdown, or PDF file to append to the knowledge context.</p>
+                  <input
+                    type="file"
+                    accept=".txt,.md,.csv,.pdf"
+                    className="field-input"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (file.size > 500_000) {
+                        showToast("File too large (max 500KB)", "error");
+                        return;
+                      }
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const text = reader.result as string;
+                        patch({ knowledgeContext: config.knowledgeContext + (config.knowledgeContext ? "\n\n---\n\n" : "") + `# ${file.name}\n\n${text}` });
+                        showToast(`Imported ${file.name}`, "success");
+                      };
+                      reader.readAsText(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
               </>
             )}
 
             {section === "tools" && (
               <>
-                <h2 className="builder-section-title">Tools &amp; Integrations</h2>
+                <h2 className="builder-section-title">Tools &amp; Capabilities</h2>
                 <p className="builder-section-desc">
-                  Enable capabilities your agent can use during conversations.
+                  Enable capabilities your agent can use during conversations. {config.enabledTools.length} of {dynamicTools.length} tools enabled.
                 </p>
-                <div className="tools-list">
-                  {AVAILABLE_TOOLS.map((tool) => (
-                    <label key={tool.id} className={`tool-card ${config.enabledTools.includes(tool.id) ? "tool-card--active" : ""}`}>
-                      <input type="checkbox" checked={config.enabledTools.includes(tool.id)} onChange={() => toggleTool(tool.id)} />
-                      <div className="tool-card-body">
-                        <span className="tool-card-name">{tool.icon} {tool.name}</span>
-                        <span className="tool-card-desc">{tool.description}</span>
-                      </div>
-                    </label>
-                  ))}
+                <div className="tools-toolbar">
+                  <input
+                    type="text"
+                    className="field-input tools-search"
+                    placeholder="Filter tools..."
+                    value={toolFilter}
+                    onChange={(e) => setToolFilter(e.target.value)}
+                  />
+                  <button type="button" className="btn btn--small" onClick={() => patch({ enabledTools: dynamicTools.map((t) => t.id) })}>
+                    Enable All
+                  </button>
+                  <button type="button" className="btn btn--small" onClick={() => patch({ enabledTools: [] })}>
+                    Disable All
+                  </button>
                 </div>
+                {!toolsLoaded ? (
+                  <p className="analytics-loading">Loading tools...</p>
+                ) : (
+                  Object.entries(toolsByCategory)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([cat, tools]) => {
+                      const filtered = toolFilter
+                        ? tools.filter((t) => t.name.toLowerCase().includes(toolFilter.toLowerCase()) || t.description.toLowerCase().includes(toolFilter.toLowerCase()))
+                        : tools;
+                      if (!filtered.length) return null;
+                      return (
+                        <div key={cat} className="tool-category">
+                          <h3 className="tool-category-label">{CATEGORY_LABELS[cat] || cat}</h3>
+                          <div className="tools-list">
+                            {filtered.map((tool) => (
+                              <label key={tool.id} className={`tool-card ${config.enabledTools.includes(tool.id) ? "tool-card--active" : ""}`}>
+                                <input type="checkbox" checked={config.enabledTools.includes(tool.id)} onChange={() => toggleTool(tool.id)} />
+                                <div className="tool-card-body">
+                                  <span className="tool-card-name">{tool.icon} {tool.name}</span>
+                                  <span className="tool-card-desc">{tool.description}</span>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
 
                 {config.enabledTools.some((t) => ["send_email", "create_calendar_event", "save_to_sheet", "schedule_recurring"].includes(t)) && (
                   <label className="tool-confirmation-field">
@@ -496,6 +618,79 @@ export default function AgentBuilder({ agentId }: Props) {
                   </div>
                   <div className="integration-note">
                     <strong>Setup:</strong> Share your Google Sheet with the service account email (editor access). The agent will auto-create headers from the data it saves.
+                  </div>
+                </div>
+
+                <div className="integration-block">
+                  <div className="integration-header">
+                    <span className="integration-icon"><Icon name="webhook" size={20} /></span>
+                    <div>
+                      <h3 className="integration-name">Webhook</h3>
+                      <p className="integration-hint">Receive real-time HTTP callbacks when events occur during agent conversations.</p>
+                    </div>
+                  </div>
+                  <label className="field">
+                    <span className="field-label">Webhook URL</span>
+                    <input
+                      type="url"
+                      className="field-input"
+                      value={config.integrations?.webhook?.url || ""}
+                      onChange={(e) =>
+                        patchIntegrations({
+                          webhook: {
+                            url: e.target.value,
+                            events: config.integrations?.webhook?.events || ["session_end"],
+                            secret: config.integrations?.webhook?.secret,
+                          },
+                        })
+                      }
+                      placeholder="https://your-server.com/webhook"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Secret (optional)</span>
+                    <input
+                      type="password"
+                      className="field-input field-input--small"
+                      value={config.integrations?.webhook?.secret || ""}
+                      onChange={(e) =>
+                        patchIntegrations({
+                          webhook: {
+                            url: config.integrations?.webhook?.url || "",
+                            events: config.integrations?.webhook?.events || ["session_end"],
+                            secret: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Shared secret for HMAC verification"
+                    />
+                  </label>
+                  <div className="field">
+                    <span className="field-label">Events</span>
+                    <div className="webhook-events">
+                      {["session_end", "tool_call", "emotion_alert", "flagged_concern"].map((evt) => {
+                        const events = config.integrations?.webhook?.events || [];
+                        return (
+                          <label key={evt} className="toggle-field toggle-field--compact">
+                            <input
+                              type="checkbox"
+                              checked={events.includes(evt)}
+                              onChange={(e) => {
+                                const next = e.target.checked ? [...events, evt] : events.filter((x) => x !== evt);
+                                patchIntegrations({
+                                  webhook: {
+                                    url: config.integrations?.webhook?.url || "",
+                                    events: next,
+                                    secret: config.integrations?.webhook?.secret,
+                                  },
+                                });
+                              }}
+                            />
+                            <span>{evt.replace(/_/g, " ")}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </>

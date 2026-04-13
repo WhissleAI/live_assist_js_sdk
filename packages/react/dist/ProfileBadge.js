@@ -1,4 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import React from "react";
 import { EMOTION_KEYS, EMOTION_EMOJI, EMOTION_COLORS, getMoodTag } from "@whissle/live-assist-core";
 export function ProfileBadge({ profile, label, align = "left", onClick }) {
     const hasData = profile.segmentCount > 0 && Object.keys(profile.emotionProfile).length > 0;

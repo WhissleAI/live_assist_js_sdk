@@ -12,5 +12,5 @@ export declare function SessionControls({ isCapturing, onStart, onStop, onAgenda
     hasTabAudio?: boolean;
     instructions?: string;
     onInstructionsSave?: (s: string) => void;
-}): import("react/jsx-runtime").JSX.Element;
+}): any;
 //# sourceMappingURL=SessionControls.d.ts.map

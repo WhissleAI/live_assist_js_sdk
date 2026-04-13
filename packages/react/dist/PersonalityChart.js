@@ -1,4 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import React from "react";
 import { EMOTION_KEYS, EMOTION_EMOJI, EMOTION_COLORS, getDominantEmotion, getMoodTag, intentDisplayLabel, } from "@whissle/live-assist-core";
 export function getProfileSegments(profile) {
     const total = EMOTION_KEYS.reduce((s, k) => s + (profile.emotionProfile[k] ?? 0), 0) || 1;

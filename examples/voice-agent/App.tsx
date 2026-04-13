@@ -10,7 +10,13 @@ import TranscribePage from "./components/TranscribePage";
 import TtsPlaygroundPage from "./components/TtsPlaygroundPage";
 import ResearchPage from "./components/ResearchPage";
 import VideoToMusicPage from "./components/VideoToMusicPage";
+import MemoryPage from "./components/MemoryPage";
+import UsagePage from "./components/UsagePage";
+import SettingsPage from "./components/SettingsPage";
+import { ToastContainer } from "./components/Toast";
+import { ConfirmModalContainer } from "./components/ConfirmModal";
 import { gatewayConfig } from "./lib/gateway-config";
+import { syncFromBackend } from "./lib/agent-store";
 import type { AgentConfig } from "./lib/agent-config";
 
 export interface EmotionTimelineEntry {
@@ -96,6 +102,8 @@ type Route =
   | { page: "video-to-music" }
   | { page: "sessions" }
   | { page: "session-detail"; sessionId: string }
+  | { page: "memory" }
+  | { page: "usage" }
   | { page: "settings" }
   | { page: "runtime"; agentId: string }
   | { page: "embed"; agentId: string };
@@ -127,6 +135,8 @@ function parseRoute(hash: string): Route {
   if (h === "research") return { page: "research" };
   if (h === "video-to-music") return { page: "video-to-music" };
   if (h === "sessions") return { page: "sessions" };
+  if (h === "memory") return { page: "memory" };
+  if (h === "usage") return { page: "usage" };
   if (h === "settings") return { page: "settings" };
 
   return { page: "voice-agents" };
@@ -196,6 +206,7 @@ export default function App() {
 
   const sessionRef = useRef<SessionState>({ ...INITIAL_SESSION });
   const [session, setSession] = useState<SessionState>(sessionRef.current);
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
   const updateSession = useCallback((patch: Partial<SessionState>) => {
     const next = { ...sessionRef.current, ...patch };
@@ -212,13 +223,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    gatewayConfig.initSession().catch(() => {});
+    gatewayConfig.initSession().then(() => {
+      // Sync agent configs with backend after session is established
+      syncFromBackend().catch(() => {});
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
     if (prevPageRef.current !== route.page) {
       setTransitioning(true);
-      const t = setTimeout(() => setTransitioning(false), 30);
+      const t = setTimeout(() => {
+        setTransitioning(false);
+        // Focus the main content area when the route changes
+        if (mainContentRef.current) {
+          mainContentRef.current.focus();
+        }
+      }, 30);
       prevPageRef.current = route.page;
       return () => clearTimeout(t);
     }
@@ -237,6 +257,8 @@ export default function App() {
           sessionRef={sessionRef}
           isEmbed={isEmbed}
         />
+        <ToastContainer />
+        <ConfirmModalContainer />
       </div>
     );
   }
@@ -267,15 +289,14 @@ export default function App() {
     case "session-detail":
       content = <SessionDetail sessionId={route.sessionId} />;
       break;
+    case "memory":
+      content = <MemoryPage />;
+      break;
+    case "usage":
+      content = <UsagePage />;
+      break;
     case "settings":
-      content = (
-        <AdminPortal
-          session={session}
-          settings={settings}
-          updateSettings={updateSettings}
-          viewMode="settings"
-        />
-      );
+      content = <SettingsPage />;
       break;
     case "voice-agents":
     default:
@@ -293,10 +314,14 @@ export default function App() {
   const pageClass = transitioning ? "page-enter" : "page-enter-active";
 
   return (
-    <AppShell activePage={activePage}>
-      <div className={pageClass} key={route.page}>
-        {content}
-      </div>
-    </AppShell>
+    <>
+      <AppShell activePage={activePage}>
+        <div className={pageClass} key={route.page} ref={mainContentRef} tabIndex={-1} style={{ outline: "none" }}>
+          {content}
+        </div>
+      </AppShell>
+      <ToastContainer />
+      <ConfirmModalContainer />
+    </>
   );
 }

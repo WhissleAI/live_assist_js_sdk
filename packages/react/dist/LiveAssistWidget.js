@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { useLiveAssist } from "./LiveAssistProvider";
 import { TranscriptView } from "./TranscriptView";
 import { ProfileBadge } from "./ProfileBadge";

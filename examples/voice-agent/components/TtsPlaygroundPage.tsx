@@ -27,13 +27,15 @@ export default function TtsPlaygroundPage() {
   const [speed, setSpeed] = useState("normal");
   const [generating, setGenerating] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const ttsRef = useRef<CartesiaTtsClient | null>(null);
 
   const handleGenerate = useCallback(async () => {
     if (!text.trim() || generating) return;
+    setError(null);
     if (!CARTESIA_API_KEY) {
-      console.error("[TTS Playground] Missing VITE_CARTESIA_API_KEY");
+      setError("TTS API key not configured. Set VITE_CARTESIA_API_KEY in your environment.");
       return;
     }
     setGenerating(true);
@@ -58,6 +60,7 @@ export default function TtsPlaygroundPage() {
       };
       client.onError = (err) => {
         console.error("[TTS Playground]", err);
+        setError(`TTS error: ${err instanceof Error ? err.message : String(err)}`);
         setGenerating(false);
       };
 
@@ -69,6 +72,7 @@ export default function TtsPlaygroundPage() {
       });
     } catch (err) {
       console.error("[TTS Playground] error:", err);
+      setError(`Connection failed: ${err instanceof Error ? err.message : "Could not connect to TTS service."}`);
       setGenerating(false);
     }
   }, [text, selectedVoice, emotion, speed, generating]);
@@ -172,6 +176,12 @@ export default function TtsPlaygroundPage() {
                 selectedId={selectedVoice.id}
                 onSelect={(v) => { setSelectedVoice(v); setShowVoicePicker(false); }}
               />
+            </div>
+          )}
+
+          {error && (
+            <div className="tts-error">
+              <Icon name="alert-triangle" size={16} /> {error}
             </div>
           )}
 

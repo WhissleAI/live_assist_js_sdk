@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { computeRmsWindows } from "@whissle/live-assist-core";
-import { loadSessions } from "../lib/session-store";
-import { getAudio } from "../lib/audio-store";
+import { loadSessions, deleteSession, updateSession } from "../lib/session-store";
+import { getAudio, deleteAudio } from "../lib/audio-store";
 import { navigate } from "../App";
+import { gatewayConfig } from "../lib/gateway-config";
+import { streamAgentRouter } from "../lib/agent-stream";
+import { getDeviceId } from "../lib/device-id";
 import type { StoredSession } from "../lib/session-store";
 import type { EmotionTimelineEntry } from "../App";
 import type { TranscriptEntry } from "../lib/liveAssistTypes";
@@ -15,6 +18,8 @@ import {
 } from "../lib/sessionTranscriptEntries";
 import { EmotionTimelineBar, createScrollSyncGroup } from "./live-assist/EmotionTimelineBar";
 import Icon from "./Icon";
+import { confirmAction } from "./ConfirmModal";
+import { showToast } from "./Toast";
 
 const WAVEFORM_WINDOW_SEC = 0.05;
 
@@ -165,6 +170,16 @@ export default function SessionDetail({ sessionId }: Props) {
   const [activeSegIdx, setActiveSegIdx] = useState(-1);
   const [micAmplitudes, setMicAmplitudes] = useState<number[] | null>(null);
   const [ttsAmplitudes, setTtsAmplitudes] = useState<number[] | null>(null);
+  const [waveformReady, setWaveformReady] = useState(0);
+
+  // AI Summary
+  const [aiSummary, setAiSummary] = useState<string>("");
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+
+  // Re-transcription
+  const [reTranscribing, setReTranscribing] = useState(false);
+  const [reTranscribed, setReTranscribed] = useState(false);
 
   const [scrollSyncGroup] = useState(() => createScrollSyncGroup());
 
@@ -416,9 +431,13 @@ export default function SessionDetail({ sessionId }: Props) {
         if (cancelled || !decoded) return;
         const channelData = decoded.getChannelData(0);
         waveformDataRef.current = computeRmsWindows(channelData, decoded.sampleRate, WAVEFORM_WINDOW_SEC);
+        if (!cancelled) setWaveformReady((v) => v + 1);
       })
       .catch(() => {
-        if (!cancelled) waveformDataRef.current = null;
+        if (!cancelled) {
+          waveformDataRef.current = null;
+          setWaveformReady((v) => v + 1);
+        }
       })
       .finally(() => {
         audioCtx?.close().catch(() => {});
@@ -440,7 +459,8 @@ export default function SessionDetail({ sessionId }: Props) {
 
   const drawWaveformCb = useCallback(() => {
     drawWaveform(waveformCanvasRef.current, waveformDataRef.current, seekMax, sortedUserTimeline, plotSegs);
-  }, [seekMax, sortedUserTimeline, plotSegs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekMax, sortedUserTimeline, plotSegs, waveformReady]);
 
   useEffect(() => {
     drawWaveformCb();
@@ -581,6 +601,214 @@ export default function SessionDetail({ sessionId }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay, seekToTime, barDurationSec, currentTime]);
 
+  // ── AI Summary: generate or load cached ──────────────────────────────
+  useEffect(() => {
+    if (!session) return;
+    // Use cached summary if available
+    if (session.aiSummary) {
+      setAiSummary(session.aiSummary);
+      return;
+    }
+    if (session.transcript.length === 0) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+
+    // Build transcript text with emotion context
+    const transcriptText = session.transcript
+      .map((seg) => {
+        const speaker = seg.speaker === "agent" ? "Agent" : "User";
+        const emoTag =
+          seg.emotion && seg.emotion !== "NEUTRAL"
+            ? ` (emotion: ${seg.emotion}${seg.emotionConfidence ? ` ${Math.round(seg.emotionConfidence * 100)}%` : ""})`
+            : "";
+        return `${speaker}: ${seg.text}${emoTag}`;
+      })
+      .join("\n");
+
+    const summaryQuery = [
+      "Analyze this voice agent conversation and provide a concise post-session analysis.",
+      "Include: 1) A 2-3 sentence summary of what was discussed,",
+      "2) Key topics covered, 3) The user's emotional journey,",
+      "4) Any notable moments or insights.",
+      "Be concise and use markdown formatting.",
+      "",
+      "Transcript:",
+      transcriptText,
+    ].join("\n");
+
+    let accumulated = "";
+    streamAgentRouter(
+      {
+        query: summaryQuery,
+        agentConfig: {
+          id: "session-analyzer",
+          name: "Session Analyzer",
+          description: "Analyzes completed voice agent sessions",
+          avatar: "",
+          voiceId: "",
+          voiceName: "",
+          ttsModel: "",
+          language: "en",
+          defaultSpeed: 1,
+          systemPrompt: "You are a conversation analyst. Provide clear, concise analysis of voice agent sessions. Use markdown formatting with headers and bullet points.",
+          model: "gemini-3-flash-preview",
+          temperature: 0.3,
+          maxOutputTokens: 1024,
+          welcomeMessage: "",
+          enabledTools: [],
+          knowledgeContext: "",
+          enableEmotionDetection: false,
+          enableEmotionTts: false,
+          enableBargeIn: false,
+          requireToolConfirmation: false,
+          maxSessionMinutes: 5,
+          integrations: {},
+          theme: { primaryColor: "#124e3f", accentColor: "#E53935", bgStyle: "solid", showFloatingWords: false, showEmotionLabel: false },
+          createdAt: "",
+          updatedAt: "",
+          status: "published",
+        },
+      },
+      {
+        onChunk: (text) => {
+          if (cancelled) return;
+          accumulated += text;
+          setAiSummary(accumulated);
+        },
+        onDone: () => {
+          if (cancelled) return;
+          setAiSummaryLoading(false);
+          // Cache the summary in localStorage
+          if (accumulated.trim()) {
+            updateSession(session.id, { aiSummary: accumulated });
+          }
+        },
+        onError: (msg) => {
+          if (cancelled) return;
+          setAiSummaryLoading(false);
+          setAiSummaryError(msg);
+        },
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (!cancelled) {
+        setAiSummaryLoading(false);
+        setAiSummaryError(err?.message || "Failed to generate summary");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [session]);
+
+  // ── Re-transcription: batch ASR for cleaner text ────────────────────
+  useEffect(() => {
+    if (!session || !micUrl) return;
+    if (session.reTranscribedAt) {
+      setReTranscribed(true);
+      return;
+    }
+    // Only re-transcribe user segments
+    const userSegs = session.transcript.filter((s) => s.speaker === "user" || s.speaker === "other");
+    if (userSegs.length === 0) return;
+
+    let cancelled = false;
+    setReTranscribing(true);
+
+    (async () => {
+      try {
+        const resp = await fetch(micUrl);
+        const blob = await resp.blob();
+
+        const formData = new FormData();
+        formData.append("file", blob, "session-mic.wav");
+        formData.append("metadata_prob", "true");
+        formData.append("word_timestamps", "true");
+
+        const sessionToken = gatewayConfig.getSessionToken();
+        const headers: Record<string, string> = {
+          "X-Device-Id": getDeviceId(),
+        };
+        if (sessionToken) headers["X-Session-Token"] = sessionToken;
+
+        const asrResp = await fetch(`${gatewayConfig.httpBase}/asr/transcribe`, {
+          method: "POST",
+          headers,
+          body: formData,
+        });
+
+        if (cancelled) return;
+
+        if (!asrResp.ok) {
+          console.warn("[ReTranscribe] ASR returned", asrResp.status);
+          setReTranscribing(false);
+          return;
+        }
+
+        const asrResult = await asrResp.json();
+        if (cancelled) return;
+
+        const newTranscript = asrResult.transcript as string | undefined;
+        if (!newTranscript?.trim()) {
+          setReTranscribing(false);
+          return;
+        }
+
+        // If word timestamps are available, use them to align with segments
+        const wordTs = asrResult.word_timestamps as Array<{ word: string; start: number; end: number }> | undefined;
+
+        const updatedTranscript = [...session.transcript];
+        if (wordTs?.length) {
+          // Map words back to original segments by time range
+          for (let i = 0; i < updatedTranscript.length; i++) {
+            const seg = updatedTranscript[i]!;
+            if (seg.speaker !== "user" && seg.speaker !== "other") continue;
+            const segStart = segmentAudioOffsetSec(seg, anchorMs);
+            const nextUserSeg = updatedTranscript.slice(i + 1).find((s) => s.speaker === "user" || s.speaker === "other");
+            const segEnd = nextUserSeg ? segmentAudioOffsetSec(nextUserSeg, anchorMs) : Infinity;
+
+            const wordsInRange = wordTs.filter((w) => w.start >= segStart - 0.1 && w.start < segEnd);
+            if (wordsInRange.length > 0) {
+              updatedTranscript[i] = { ...seg, text: wordsInRange.map((w) => w.word).join(" ") };
+            }
+          }
+        } else {
+          // Fallback: if only one user segment, replace its text entirely
+          const firstUserIdx = updatedTranscript.findIndex((s) => s.speaker === "user" || s.speaker === "other");
+          if (firstUserIdx >= 0 && userSegs.length === 1) {
+            updatedTranscript[firstUserIdx] = { ...updatedTranscript[firstUserIdx]!, text: newTranscript };
+          }
+        }
+
+        // Update session in localStorage
+        updateSession(session.id, {
+          transcript: updatedTranscript,
+          reTranscribedAt: Date.now(),
+        });
+
+        // Update local state
+        setSession((prev) => prev ? { ...prev, transcript: updatedTranscript, reTranscribedAt: Date.now() } : prev);
+        setReTranscribed(true);
+        setReTranscribing(false);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("[ReTranscribe] error:", err);
+          setReTranscribing(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, micUrl]);
+
   if (!session) {
     return (
       <div className="studio-page">
@@ -614,10 +842,79 @@ export default function SessionDetail({ sessionId }: Props) {
         <h1 className="session-detail-title">
           {session.agentName || "Session"} · {new Date(session.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
         </h1>
+        <button
+          type="button"
+          className="btn btn--ghost btn--small session-detail-delete"
+          onClick={async () => {
+            if (await confirmAction("Delete session?", "This cannot be undone.")) {
+              deleteSession(session.id);
+              deleteAudio(session.id).catch(() => {});
+              showToast("Session deleted", "success");
+              navigate("sessions");
+            }
+          }}
+        >
+          <Icon name="trash" size={14} /> Delete
+        </button>
+      </div>
+
+      {/* Session metadata summary */}
+      <div className="session-detail-meta">
+        <span className="session-meta-chip">
+          <Icon name="clock" size={13} /> {session.durationSec > 0 ? formatTime(session.durationSec) : "—"}
+        </span>
+        <span className="session-meta-chip">
+          <Icon name="message-square" size={13} /> {segments.length} segments
+        </span>
+        {session.emotionSummary.dominant && session.emotionSummary.dominant !== "NEUTRAL" && (
+          <span
+            className="session-meta-chip session-meta-chip--emotion"
+            style={{ color: EMOTION_COLORS[session.emotionSummary.dominant] || "var(--color-text-secondary)" }}
+          >
+            <span className="emotion-legend-dot" style={{ background: EMOTION_COLORS[session.emotionSummary.dominant] }} />
+            {session.emotionSummary.dominant.charAt(0) + session.emotionSummary.dominant.slice(1).toLowerCase()}
+          </span>
+        )}
+        {session.emotionSummary.shifts > 0 && (
+          <span className="session-meta-chip">
+            {session.emotionSummary.shifts} emotion shift{session.emotionSummary.shifts > 1 ? "s" : ""}
+          </span>
+        )}
+        <span className="session-meta-chip">
+          {new Date(session.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+        </span>
+        {/* Processing status */}
+        {(reTranscribing || aiSummaryLoading) && (
+          <span className="session-meta-chip session-meta-chip--processing">
+            <span className="processing-dot" /> Processing...
+          </span>
+        )}
+        {reTranscribed && !reTranscribing && (
+          <span className="session-meta-chip session-meta-chip--done">
+            <Icon name="check" size={12} /> Enhanced
+          </span>
+        )}
       </div>
 
       <div className="session-detail-layout">
         <div className="session-detail-audio-col">
+          {/* AI Analysis */}
+          {(aiSummary || aiSummaryLoading || aiSummaryError) && (
+            <div className="ai-summary-card">
+              <div className="ai-summary-header">
+                <Icon name="sparkles" size={15} />
+                <span>AI Analysis</span>
+                {aiSummaryLoading && <span className="ai-summary-loading">Analyzing...</span>}
+              </div>
+              {aiSummaryError && (
+                <div className="ai-summary-error">{aiSummaryError}</div>
+              )}
+              {aiSummary && (
+                <div className="ai-summary-body">{aiSummary}</div>
+              )}
+            </div>
+          )}
+
           {loading && <div className="session-detail-message">Loading audio...</div>}
 
           {!loading && !hasAudio && (
@@ -653,7 +950,7 @@ export default function SessionDetail({ sessionId }: Props) {
 
               <div className="session-detail-audio-controls-clip">
                 <div className="audio-controls-bar">
-                  <button type="button" className="audio-play-btn" onClick={togglePlay}>
+                  <button type="button" className="audio-play-btn" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"}>
                     <Icon name={playing ? "pause" : "play"} size={16} />
                   </button>
                   <span className="audio-time">
@@ -667,6 +964,7 @@ export default function SessionDetail({ sessionId }: Props) {
                     step={0.001}
                     value={displayDuration > 0 ? currentTime / displayDuration : 0}
                     onChange={(e) => seekToPct(parseFloat(e.target.value))}
+                    aria-label="Seek position"
                   />
                   <button type="button" className="audio-speed-btn" onClick={cycleSpeed}>
                     {playbackSpeed}x
@@ -682,6 +980,9 @@ export default function SessionDetail({ sessionId }: Props) {
                       <option value="tts">Agent</option>
                     </select>
                   )}
+                </div>
+                <div className="audio-shortcuts-hint">
+                  <kbd>Space</kbd> play/pause &nbsp; <kbd>&larr;</kbd><kbd>&rarr;</kbd> seek 5s
                 </div>
               </div>
             </>
@@ -757,6 +1058,7 @@ export default function SessionDetail({ sessionId }: Props) {
 
           {hasAudio && (
             <div className="session-detail-waveform-wrap" onClick={seekFromStripClick}>
+              <div className="waveform-label">Audio waveform</div>
               <div className="audio-waveform">
                 <canvas ref={waveformCanvasRef} />
               </div>
@@ -774,7 +1076,11 @@ export default function SessionDetail({ sessionId }: Props) {
         </div>
 
         <div className="session-detail-transcript-col">
-          <div className="session-detail-transcript-header">Transcript · {segments.length} segments</div>
+          <div className="session-detail-transcript-header">
+            Transcript · {segments.length} segments
+            {reTranscribing && <span className="transcript-enhancing"><span className="processing-dot" /> Enhancing...</span>}
+            {reTranscribed && !reTranscribing && <span className="transcript-enhanced"><Icon name="check" size={12} /> Enhanced</span>}
+          </div>
           <div className="session-detail-transcript-body" ref={transcriptScrollRef}>
             {segments.map((seg) => (
               <div
