@@ -120,18 +120,35 @@ function apiHeaders(): Record<string, string> {
   return h;
 }
 
+/** Debounced backend sync — at most one in-flight request per agent, throttled to 10s intervals. */
+const _syncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const _syncLastSent = new Map<string, number>();
+const SYNC_THROTTLE_MS = 10_000;
+
 /** Push a single agent config to the backend. Best-effort — errors are logged, not thrown. */
 export function syncAgentToBackend(config: AgentConfig): void {
-  const url = `${gatewayConfig.httpBase}/agent/configs`;
-  fetch(url, {
-    method: "POST",
-    headers: apiHeaders(),
-    body: JSON.stringify({
-      user_id: getDeviceId(),
-      agent_id: config.id,
-      config,
-    }),
-  }).catch((e) => console.warn("[AgentSync] push failed:", e));
+  // Clear any pending sync for this agent
+  const existing = _syncTimers.get(config.id);
+  if (existing) clearTimeout(existing);
+
+  const lastSent = _syncLastSent.get(config.id) ?? 0;
+  const elapsed = Date.now() - lastSent;
+  const delay = elapsed >= SYNC_THROTTLE_MS ? 0 : SYNC_THROTTLE_MS - elapsed;
+
+  _syncTimers.set(config.id, setTimeout(() => {
+    _syncTimers.delete(config.id);
+    _syncLastSent.set(config.id, Date.now());
+    const url = `${gatewayConfig.httpBase}/agent/configs`;
+    fetch(url, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({
+        user_id: getDeviceId(),
+        agent_id: config.id,
+        config,
+      }),
+    }).catch((e) => console.warn("[AgentSync] push failed:", e));
+  }, delay));
 }
 
 /** Delete an agent on the backend. Best-effort. */

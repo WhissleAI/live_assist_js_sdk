@@ -56,7 +56,16 @@ function isSkillsMatch(val: unknown): val is GapAnalysis["skillsMatch"] {
 
 export function parsePrepResponse(text: string): GapAnalysis | null {
   try {
-    const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    // Strip markdown fences and leading/trailing noise around JSON
+    let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+    // Extract JSON object if surrounded by non-JSON text
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    }
+
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
     if (

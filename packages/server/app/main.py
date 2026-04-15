@@ -16,6 +16,7 @@ from .routes.voice_agent import router as voice_agent_router
 from .routes.tts_proxy import router as tts_proxy_router
 from .routes.asr_proxy import router as asr_proxy_router
 from .routes.neuropsych_router import router as neuropsych_router
+from .routes.interview_coach import router as interview_coach_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
 log = logging.getLogger("live-assist")
@@ -36,6 +37,7 @@ app.include_router(voice_agent_router)
 app.include_router(tts_proxy_router)
 app.include_router(asr_proxy_router)
 app.include_router(neuropsych_router)
+app.include_router(interview_coach_router)
 
 
 @app.get("/health")
@@ -45,7 +47,7 @@ async def health():
 
 def _send_install_ping():
     """Fire-and-forget ping to track installs. Runs in a background thread."""
-    tracker_url = os.getenv("WHISSLE_TRACKER_URL", "https://browser.whissle.ai/api/installs")
+    tracker_url = os.getenv("WHISSLE_TRACKER_URL", "https://lulu.whissle.ai/api/installs")
     if not tracker_url:
         return
     try:

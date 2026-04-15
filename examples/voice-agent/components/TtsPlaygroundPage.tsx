@@ -2,10 +2,9 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import { CartesiaTtsClient } from "../lib/cartesia-tts";
 import type { CartesiaTtsConfig } from "../lib/cartesia-tts";
 import { VOICE_CATALOG, type VoiceEntry } from "../lib/voice-catalog";
+import { getCartesiaApiKey } from "../lib/tts-proxy";
 import VoicePicker from "./VoicePicker";
 import Icon from "./Icon";
-
-const CARTESIA_API_KEY = import.meta.env.VITE_CARTESIA_API_KEY as string;
 
 const EMOTION_OPTIONS = [
   "neutral", "happy", "excited", "calm", "content", "curious",
@@ -34,7 +33,8 @@ export default function TtsPlaygroundPage() {
   const handleGenerate = useCallback(async () => {
     if (!text.trim() || generating) return;
     setError(null);
-    if (!CARTESIA_API_KEY) {
+    const apiKey = getCartesiaApiKey();
+    if (!apiKey) {
       setError("TTS API key not configured. Set VITE_CARTESIA_API_KEY in your environment.");
       return;
     }
@@ -47,7 +47,7 @@ export default function TtsPlaygroundPage() {
       }
 
       const config: CartesiaTtsConfig = {
-        apiKey: CARTESIA_API_KEY,
+        apiKey,
         voiceId: selectedVoice.id,
         sampleRate: 22050,
       };
@@ -99,6 +99,13 @@ export default function TtsPlaygroundPage() {
         <h1 className="studio-page-title">Text to Speech</h1>
         <p className="studio-page-subtitle">Generate expressive speech with emotion control</p>
       </div>
+
+      {!getCartesiaApiKey() && (
+        <div className="tts-key-warning">
+          <Icon name="alert-triangle" size={16} />
+          <span>TTS API key not configured. Set <code>VITE_CARTESIA_API_KEY</code> in your environment to use Text to Speech.</span>
+        </div>
+      )}
 
       <div className="tts-playground-layout">
         <div className="tts-input-panel">

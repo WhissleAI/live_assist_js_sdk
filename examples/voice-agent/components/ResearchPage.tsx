@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from "react";
 import { gatewayConfig } from "../lib/gateway-config";
 import { getDeviceId } from "../lib/device-id";
+import { markdownToHtml } from "../lib/markdownToHtml";
 import Icon from "./Icon";
 
 interface Source {
@@ -9,13 +10,37 @@ interface Source {
   snippet?: string;
 }
 
+interface HistoryEntry {
+  query: string;
+  summary: string;
+  sources: Source[];
+  timestamp: number;
+}
+
+const HISTORY_KEY = "whissle_research_history";
+const MAX_HISTORY = 20;
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveHistory(entries: HistoryEntry[]) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, MAX_HISTORY)));
+}
+
 export default function ResearchPage() {
   const [query, setQuery] = useState("");
   const [streamText, setStreamText] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  const [showHistory, setShowHistory] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const sourcesRef = useRef<Source[]>([]);
 
   const handleSearch = useCallback(async () => {
     if (!query.trim() || loading) return;
@@ -27,6 +52,7 @@ export default function ResearchPage() {
     setLoading(true);
     setStreamText("");
     setSources([]);
+    sourcesRef.current = [];
     setError(null);
 
     try {
@@ -102,11 +128,13 @@ export default function ResearchPage() {
                 setStreamText(parsed.summary);
               }
               if (Array.isArray(parsed.sources)) {
-                setSources(parsed.sources.map((s: Record<string, unknown>) => ({
+                const mapped = parsed.sources.map((s: Record<string, unknown>) => ({
                   title: s.title as string || s.url as string || "",
                   url: s.url as string || "",
                   snippet: s.snippet as string || "",
-                })));
+                }));
+                sourcesRef.current = mapped;
+                setSources(mapped);
               }
             }
 
@@ -122,6 +150,23 @@ export default function ResearchPage() {
       }
     } finally {
       setLoading(false);
+      // Save to history after completion
+      setStreamText((finalText) => {
+        if (finalText.trim()) {
+          const entry: HistoryEntry = {
+            query: query.trim(),
+            summary: finalText,
+            sources: sourcesRef.current,
+            timestamp: Date.now(),
+          };
+          setHistory((prev) => {
+            const updated = [entry, ...prev.filter((h) => h.query !== entry.query)].slice(0, MAX_HISTORY);
+            saveHistory(updated);
+            return updated;
+          });
+        }
+        return finalText;
+      });
     }
   }, [query, loading]);
 
@@ -156,7 +201,49 @@ export default function ResearchPage() {
         >
           {loading ? "Researching..." : <><Icon name="search" size={16} /> Research</>}
         </button>
+        {loading && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--small"
+            onClick={() => { abortRef.current?.abort(); setLoading(false); }}
+          >
+            Cancel
+          </button>
+        )}
+        {history.length > 0 && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--small"
+            onClick={() => setShowHistory(!showHistory)}
+          >
+            <Icon name="clock" size={14} /> History ({history.length})
+          </button>
+        )}
       </div>
+
+      {showHistory && history.length > 0 && (
+        <div className="research-history">
+          <h3 className="research-history-title">Recent Research</h3>
+          {history.map((h, i) => (
+            <button
+              key={i}
+              type="button"
+              className="research-history-item"
+              onClick={() => {
+                setQuery(h.query);
+                setStreamText(h.summary);
+                setSources(h.sources);
+                setShowHistory(false);
+              }}
+            >
+              <span className="research-history-query">{h.query}</span>
+              <span className="research-history-date">
+                {new Date(h.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="research-error">{error}</div>
@@ -210,50 +297,3 @@ export default function ResearchPage() {
   );
 }
 
-function markdownToHtml(md: string): string {
-  // Escape HTML entities first to prevent XSS
-  let html = md
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-  // Headings
-  html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
-  html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-
-  // Bold / italic
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-  // Inline code
-  html = html.replace(/`(.+?)`/g, "<code>$1</code>");
-
-  // Links: [text](url) — only allow http(s) URLs
-  html = html.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-  );
-
-  // Unordered lists: lines starting with - or *
-  html = html.replace(/^(?:[-*]) (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
-
-  // Ordered lists: lines starting with 1. 2. etc.
-  html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => {
-    if (match.includes("<ul>")) return match;
-    return `<ol>${match}</ol>`;
-  });
-
-  // Paragraphs
-  html = html.replace(/\n\n/g, "</p><p>");
-  html = html.replace(/\n/g, "<br>");
-  html = `<p>${html}</p>`;
-
-  // Clean up empty paragraphs
-  html = html.replace(/<p>\s*<\/p>/g, "");
-
-  return html;
-}

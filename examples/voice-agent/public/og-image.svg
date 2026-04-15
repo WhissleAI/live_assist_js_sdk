@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#0f172a"/>
+  <rect x="0" y="0" width="1200" height="4" fill="#124e3f"/>
+  <!-- Logo W -->
+  <g transform="translate(500, 160) scale(2.5)">
+    <rect x="4" y="38" width="8" height="8" rx="4" fill="#E53935"/>
+    <rect x="16" y="28" width="8" height="28" rx="4" fill="#E53935"/>
+    <rect x="76" y="28" width="8" height="28" rx="4" fill="#E53935"/>
+    <rect x="88" y="38" width="8" height="8" rx="4" fill="#E53935"/>
+    <path d="M30 18 C30 18 30 68 30 72 C30 80 38 80 38 72 L50 32 L62 72 C62 80 70 80 70 72 C70 68 70 18 70 18" stroke="#E53935" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="50" cy="12" r="6" fill="#4285F4"/>
+    <rect x="26" y="78" width="12" height="10" rx="5" fill="#124e3f"/>
+    <rect x="62" y="78" width="12" height="10" rx="5" fill="#124e3f"/>
+  </g>
+  <!-- Title -->
+  <text x="600" y="460" text-anchor="middle" fill="#e7e9ea" font-family="system-ui, -apple-system, sans-serif" font-size="48" font-weight="700">Whissle Studio</text>
+  <text x="600" y="510" text-anchor="middle" fill="#8b98a5" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="400">Build &amp; Deploy Voice AI Agents</text>
+  <!-- Accent line -->
+  <rect x="520" y="530" width="160" height="3" rx="1.5" fill="#124e3f"/>
+</svg>

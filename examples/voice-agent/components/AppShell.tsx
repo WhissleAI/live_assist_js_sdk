@@ -1,34 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { navigate } from "../App";
+import { getStoredTheme, applyTheme, saveTheme, cycleTheme, getThemeIcon, getThemeLabel } from "../lib/theme";
+import { useOnlineStatus } from "../lib/useOnlineStatus";
 import Icon from "./Icon";
 import WhissleLogo from "./WhissleLogo";
-
-const THEME_KEY = "whissle_theme";
-const THEME_CYCLE: string[] = ["system", "light", "dark"];
-
-function getStoredTheme(): string {
-  return localStorage.getItem(THEME_KEY) || "system";
-}
-
-function applyTheme(theme: string) {
-  if (theme === "system") {
-    document.documentElement.removeAttribute("data-theme");
-  } else {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-}
-
-function getThemeIcon(theme: string): string {
-  if (theme === "light") return "sun";
-  if (theme === "dark") return "moon";
-  return "monitor";
-}
-
-function getThemeLabel(theme: string): string {
-  if (theme === "light") return "Light";
-  if (theme === "dark") return "Dark";
-  return "System";
-}
 
 interface NavItem {
   id: string;
@@ -58,19 +33,29 @@ interface Props {
 export default function AppShell({ activePage, children }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [theme, setTheme] = useState(getStoredTheme);
+  const isOnline = useOnlineStatus();
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
-  const cycleTheme = useCallback(() => {
+  const handleCycleTheme = useCallback(() => {
     setTheme((prev) => {
-      const idx = THEME_CYCLE.indexOf(prev);
-      const next = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
-      localStorage.setItem(THEME_KEY, next);
+      const next = cycleTheme(prev);
+      saveTheme(next);
       return next;
     });
   }, []);
+
+  // Close mobile drawer on Escape
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
 
   const handleNav = (route: string) => {
     navigate(route);
@@ -92,9 +77,9 @@ export default function AppShell({ activePage, children }: Props) {
         >
           <WhissleLogo size={22} />
         </button>
-        <span className="sidebar-brand-text" onClick={() => handleNav("")}>
+        <button type="button" className="sidebar-brand-text" onClick={() => handleNav("")}>
           Whissle <span className="sidebar-brand-sub">Studio</span>
-        </span>
+        </button>
       </div>
 
       <div className="sidebar-section-label">Build</div>
@@ -130,8 +115,9 @@ export default function AppShell({ activePage, children }: Props) {
       <button
         type="button"
         className="sidebar-nav-btn"
-        onClick={cycleTheme}
+        onClick={handleCycleTheme}
         title={`Theme: ${getThemeLabel(theme)}`}
+        aria-label={`Switch theme, currently ${getThemeLabel(theme)}`}
       >
         <span className="sidebar-nav-icon"><Icon name={getThemeIcon(theme)} size={18} /></span>
         <span className="sidebar-nav-label">{getThemeLabel(theme)}</span>
@@ -159,7 +145,7 @@ export default function AppShell({ activePage, children }: Props) {
       </aside>
 
       {mobileOpen && (
-        <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />
+        <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} role="presentation" aria-hidden="true" />
       )}
       <aside className={`sidebar-drawer ${mobileOpen ? "sidebar-drawer--open" : ""}`}>
         <button
@@ -179,6 +165,7 @@ export default function AppShell({ activePage, children }: Props) {
             type="button"
             className="studio-menu-btn"
             onClick={() => setMobileOpen(true)}
+            aria-label="Open navigation menu"
           >
             <Icon name="menu" size={20} />
           </button>
@@ -187,6 +174,12 @@ export default function AppShell({ activePage, children }: Props) {
             Whissle Studio
           </span>
         </header>
+        {!isOnline && (
+          <div className="offline-banner" role="alert">
+            <Icon name="wifi-off" size={16} />
+            You are offline. Some features may be unavailable.
+          </div>
+        )}
         <main className="studio-main">
           {children}
         </main>

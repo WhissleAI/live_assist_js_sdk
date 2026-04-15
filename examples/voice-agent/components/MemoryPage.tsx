@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { gatewayConfig } from "../lib/gateway-config";
 import { getDeviceId } from "../lib/device-id";
 import Icon from "./Icon";
+import { confirmAction } from "./ConfirmModal";
+import { showToast } from "./Toast";
 
 interface MemoryItem {
   text: string;
@@ -121,6 +123,41 @@ export default function MemoryPage() {
     }
   }, [query, deviceId]);
 
+  const handleDelete = useCallback(async (item: MemoryItem) => {
+    if (!(await confirmAction("Delete memory?", `"${item.text.slice(0, 80)}${item.text.length > 80 ? "..." : ""}"`))) return;
+    try {
+      const sessionToken = gatewayConfig.getSessionToken();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Device-Id": deviceId,
+      };
+      if (sessionToken) headers["X-Session-Token"] = sessionToken;
+
+      const res = await fetch(
+        `${gatewayConfig.httpBase}/agent/memory/delete`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            user_id: deviceId,
+            memory_id: item.id,
+            text: item.text,
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Delete failed (${res.status})`);
+      }
+
+      setMemories((prev) => prev.filter((m) => (m.id || m.text) !== (item.id || item.text)));
+      if (stats) setStats({ ...stats, total: Math.max(0, stats.total - 1) });
+      showToast("Memory deleted", "success");
+    } catch (err: unknown) {
+      showToast((err as Error).message || "Failed to delete memory", "error");
+    }
+  }, [deviceId, stats]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter") {
@@ -192,6 +229,22 @@ export default function MemoryPage() {
 
       {error && <div className="memory-error">{error}</div>}
 
+      {/* Loading skeleton */}
+      {loading && memories.length === 0 && (
+        <div className="memory-list">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div className="memory-item memory-item--skeleton" key={i}>
+              <div className="memory-item-header">
+                <span className="skeleton-bar" style={{ width: 60, height: 18, borderRadius: 9 }} />
+                <span className="skeleton-bar" style={{ width: 100, height: 14 }} />
+              </div>
+              <div className="skeleton-bar" style={{ width: "80%", height: 14, marginTop: 8 }} />
+              <div className="skeleton-bar" style={{ width: "60%", height: 14, marginTop: 4 }} />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Memory list */}
       {memories.length > 0 ? (
         <div className="memory-list">
@@ -206,6 +259,15 @@ export default function MemoryPage() {
                     {formatDate(item.created_at)}
                   </span>
                 )}
+                <button
+                  type="button"
+                  className="memory-item-delete"
+                  onClick={() => handleDelete(item)}
+                  title="Delete memory"
+                  aria-label="Delete memory"
+                >
+                  <Icon name="trash" size={14} />
+                </button>
               </div>
               <p className="memory-item-text">{item.text}</p>
             </div>

@@ -1,33 +1,34 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { InterviewConfig } from "../App";
 import type { AnswerScore } from "../lib/scoring";
-import type { ToolCallResult } from "../lib/tools";
-import type { GapAnalysis } from "../lib/prep";
+import type { ToolCallResult } from "../lib/roles";
 import { computeReadinessScore } from "../lib/scoring";
 import { saveSessionRecord } from "../lib/progress";
+import { logSession, hashText } from "../lib/session-logger";
 import AnswerScorecard from "./AnswerScorecard";
+import EmotionHeatmap from "./EmotionHeatmap";
 
 interface Props {
   config: InterviewConfig;
   answers: AnswerScore[];
   endData: ToolCallResult | null;
-  gapAnalysis: GapAnalysis | null;
   onBackToSetup: () => void;
   onNewSession: () => void;
 }
 
 type Tab = "verdict" | "answers" | "coverage";
 
-const VERDICT_META: Record<string, { emoji: string; label: string; color: string; bg: string }> = {
-  strong_hire: { emoji: "✅", label: "Strong Hire", color: "#15803d", bg: "rgba(22,163,74,0.08)" },
-  hire: { emoji: "👍", label: "Hire", color: "#16a34a", bg: "rgba(22,163,74,0.06)" },
-  lean_hire: { emoji: "🤔", label: "Lean Hire", color: "#ca8a04", bg: "rgba(202,138,4,0.06)" },
-  lean_no_hire: { emoji: "⚠️", label: "Lean No Hire", color: "#d97706", bg: "rgba(217,119,6,0.06)" },
-  no_hire: { emoji: "❌", label: "No Hire", color: "#dc2626", bg: "rgba(220,38,38,0.06)" },
+const VERDICT_META: Record<string, { emoji: string; label: string; cssClass: string }> = {
+  strong_hire: { emoji: "✅", label: "Strong Hire", cssClass: "verdict--strong-hire" },
+  hire: { emoji: "👍", label: "Hire", cssClass: "verdict--hire" },
+  lean_hire: { emoji: "🤔", label: "Lean Hire", cssClass: "verdict--lean-hire" },
+  lean_no_hire: { emoji: "⚠️", label: "Lean No Hire", cssClass: "verdict--lean-no-hire" },
+  no_hire: { emoji: "❌", label: "No Hire", cssClass: "verdict--no-hire" },
+  pending: { emoji: "⏳", label: "Incomplete", cssClass: "verdict--pending" },
 };
 
 function PracticeRecommendation({ rec }: { rec: { title: string; detail: string; priority: string } }) {
-  const priorityColor = rec.priority === "critical" ? "var(--color-red)" : rec.priority === "important" ? "var(--color-amber)" : "var(--color-muted)";
+  const priorityColor = rec.priority === "critical" ? "var(--color-danger)" : rec.priority === "important" ? "var(--color-warning)" : "var(--color-text-dim)";
   return (
     <div className="practice-rec">
       <div className="practice-rec-header">
@@ -40,7 +41,7 @@ function PracticeRecommendation({ rec }: { rec: { title: string; detail: string;
   );
 }
 
-export default function SessionReport({ config, answers, endData, gapAnalysis, onBackToSetup, onNewSession }: Props) {
+export default function SessionReport({ config, answers, endData, onBackToSetup, onNewSession }: Props) {
   const readinessScore = computeReadinessScore(answers);
   const endArgs = endData?.arguments ?? {};
   const [tab, setTab] = useState<Tab>("verdict");
@@ -54,8 +55,10 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
     const avgDelivery = Math.round(answers.reduce((s, a) => s + a.delivery.overall, 0) / answers.length);
     const avgConfidence = Math.round(answers.reduce((s, a) => s + a.delivery.confidence, 0) / answers.length);
 
+    const sessionId = Date.now().toString(36);
+
     saveSessionRecord({
-      id: Date.now().toString(36),
+      id: sessionId,
       date: new Date().toLocaleDateString(),
       role: config.jdText.slice(0, 40) || "General",
       difficulty: config.difficulty,
@@ -65,10 +68,47 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
       confidenceAvg: avgConfidence,
       questionCount: answers.length,
     });
-  }, [answers, readinessScore, config]);
+
+    // PostgreSQL logging (fire-and-forget)
+    const endPayload = endData?.arguments ?? {};
+    (async () => {
+      const jdHash = config.jdText ? await hashText(config.jdText) : "";
+      await logSession(config.agentUrl, {
+        session_id: sessionId,
+        difficulty: config.difficulty,
+        jd_text_hash: jdHash,
+        questions: answers.map((a) => a.questionText),
+        answers: answers.map((a) => a.answerText),
+        scores: {
+          readiness: readinessScore,
+          contentAvg: avgContent,
+          deliveryAvg: avgDelivery,
+          confidenceAvg: avgConfidence,
+        },
+        verdict: (endPayload.verdict as string) ?? "",
+        verdict_reasoning: (endPayload.verdict_reasoning as string) ?? "",
+        delivery_metrics: {
+          avgConfidence,
+          totalFillers: answers.reduce((s, a) => s + a.delivery.fillerCount, 0),
+        },
+        vocal_metrics: {
+          avgStability: Math.round(answers.reduce((s, a) => s + a.vocalStability, 0) / answers.length),
+          totalConvictionMoments: answers.reduce((s, a) => s + a.convictionMoments, 0),
+          totalNervousSpikes: answers.reduce((s, a) => s + a.microNervousMoments, 0),
+          intentPatterns: answers.map((a) => a.intentPattern),
+        },
+        readiness_score: readinessScore,
+        duration_sec: answers.reduce((s, a) => s + a.delivery.durationSec, 0),
+        question_count: answers.length,
+        top_strengths: (endPayload.top_strengths as string[]) ?? [],
+        growth_areas: (endPayload.growth_areas as string[]) ?? [],
+      });
+    })();
+  }, [answers, readinessScore, config, endData]);
 
   const verdict = (endArgs.verdict as string) ?? "";
-  const verdictMeta = VERDICT_META[verdict] ?? VERDICT_META["lean_hire"];
+  const verdictMeta = VERDICT_META[verdict] ?? VERDICT_META["pending"];
+  const verdictCss = verdictMeta.cssClass;
   const verdictReasoning = (endArgs.verdict_reasoning as string) ?? (endArgs.overall_feedback as string) ?? "";
   const practiceRecs = (endArgs.practice_recommendations as Array<{ title: string; detail: string; priority: string }>) ?? [];
   const weakestIdx = (endArgs.weakest_question_index as number) ?? -1;
@@ -78,6 +118,9 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
   const avgConfidence = answers.length > 0 ? Math.round(answers.reduce((s, a) => s + a.delivery.confidence, 0) / answers.length) : 0;
   const paced = answers.filter((a) => a.delivery.avgPaceWPM > 0);
   const avgPace = paced.length > 0 ? Math.round(paced.reduce((s, a) => s + a.delivery.avgPaceWPM, 0) / paced.length) : 0;
+  const totalDurationSec = Math.round(answers.reduce((s, a) => s + a.delivery.durationSec, 0));
+  const totalDurationStr = `${Math.floor(totalDurationSec / 60)}:${(totalDurationSec % 60).toString().padStart(2, "0")}`;
+  const avgStability = answers.length > 0 ? Math.round(answers.reduce((s, a) => s + a.vocalStability, 0) / answers.length) : 100;
 
   return (
     <div className="report-root">
@@ -89,26 +132,26 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
         </div>
       </div>
 
-      <div className="report-tabs">
-        <button className={`report-tab ${tab === "verdict" ? "report-tab--active" : ""}`} onClick={() => setTab("verdict")}>
+      <div className="report-tabs" role="tablist" aria-label="Report sections">
+        <button role="tab" aria-selected={tab === "verdict"} aria-controls="tabpanel-verdict" id="tab-verdict" className={`report-tab ${tab === "verdict" ? "report-tab--active" : ""}`} onClick={() => setTab("verdict")}>
           Verdict
         </button>
-        <button className={`report-tab ${tab === "answers" ? "report-tab--active" : ""}`} onClick={() => setTab("answers")}>
+        <button role="tab" aria-selected={tab === "answers"} aria-controls="tabpanel-answers" id="tab-answers" className={`report-tab ${tab === "answers" ? "report-tab--active" : ""}`} onClick={() => setTab("answers")}>
           Answers ({answers.length})
         </button>
-        <button className={`report-tab ${tab === "coverage" ? "report-tab--active" : ""}`} onClick={() => setTab("coverage")}>
+        <button role="tab" aria-selected={tab === "coverage"} aria-controls="tabpanel-coverage" id="tab-coverage" className={`report-tab ${tab === "coverage" ? "report-tab--active" : ""}`} onClick={() => setTab("coverage")}>
           JD Coverage
         </button>
       </div>
 
       <div className="report-content">
-        <div className="report-content-inner">
+        <div className="report-content-inner" role="tabpanel" id={`tabpanel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab === "verdict" && (
             <>
-              <div className="verdict-card" style={{ background: verdictMeta.bg, borderColor: verdictMeta.color }}>
+              <div className={`verdict-card ${verdictCss}`}>
                 <div className="verdict-card-top">
                   <span className="verdict-emoji">{verdictMeta.emoji}</span>
-                  <span className="verdict-label" style={{ color: verdictMeta.color }}>{verdictMeta.label}</span>
+                  <span className="verdict-label">{verdictMeta.label}</span>
                   <span className="verdict-score">{readinessScore}/100</span>
                 </div>
                 {verdictReasoning && (
@@ -118,19 +161,19 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
 
               <div className="report-delivery-summary">
                 <div className="report-delivery-item">
-                  <span className="report-delivery-value" style={{ color: avgConfidence >= 60 ? "var(--color-green)" : avgConfidence >= 40 ? "var(--color-amber)" : "var(--color-red)" }}>
+                  <span className="report-delivery-value" style={{ color: avgConfidence >= 60 ? "var(--color-success)" : avgConfidence >= 40 ? "var(--color-warning)" : "var(--color-danger)" }}>
                     {avgConfidence}%
                   </span>
                   <span className="report-delivery-label">Confidence</span>
                 </div>
                 <div className="report-delivery-item">
-                  <span className="report-delivery-value" style={{ color: avgPace >= 120 && avgPace <= 160 ? "var(--color-green)" : "var(--color-amber)" }}>
+                  <span className="report-delivery-value" style={{ color: avgPace >= 120 && avgPace <= 160 ? "var(--color-success)" : "var(--color-warning)" }}>
                     {avgPace > 0 ? avgPace : "—"}
                   </span>
                   <span className="report-delivery-label">Avg WPM</span>
                 </div>
                 <div className="report-delivery-item">
-                  <span className="report-delivery-value" style={{ color: totalFillers > 10 ? "var(--color-red)" : totalFillers > 5 ? "var(--color-amber)" : "var(--color-green)" }}>
+                  <span className="report-delivery-value" style={{ color: totalFillers > 10 ? "var(--color-danger)" : totalFillers > 5 ? "var(--color-warning)" : "var(--color-success)" }}>
                     {totalFillers}
                   </span>
                   <span className="report-delivery-label">Total Fillers</span>
@@ -141,7 +184,21 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
                   </span>
                   <span className="report-delivery-label">Content Avg</span>
                 </div>
+                <div className="report-delivery-item">
+                  <span className="report-delivery-value">{totalDurationStr}</span>
+                  <span className="report-delivery-label">Total Time</span>
+                </div>
+                {avgStability < 100 && (
+                  <div className="report-delivery-item">
+                    <span className="report-delivery-value" style={{ color: avgStability >= 70 ? "var(--color-success)" : avgStability >= 50 ? "var(--color-warning)" : "var(--color-danger)" }}>
+                      {avgStability}%
+                    </span>
+                    <span className="report-delivery-label">Vocal Stability</span>
+                  </div>
+                )}
               </div>
+
+              <EmotionHeatmap answers={answers} />
 
               <div className="report-cols">
                 {(endArgs.top_strengths as string[] | undefined)?.length ? (
@@ -184,6 +241,7 @@ export default function SessionReport({ config, answers, endData, gapAnalysis, o
 
           {tab === "answers" && (
             <>
+              <EmotionHeatmap answers={answers} />
               <p className="report-answers-intro">
                 Click any answer to see the full transcript, what the interviewer was thinking, and specific behavioral feedback.
               </p>

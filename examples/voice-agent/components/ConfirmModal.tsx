@@ -5,19 +5,18 @@ interface ConfirmState {
   message: string;
 }
 
-let _setConfirm: React.Dispatch<React.SetStateAction<ConfirmState | null>> | null = null;
+let _activeContainer: { setConfirm: React.Dispatch<React.SetStateAction<ConfirmState | null>> } | null = null;
 let _resolve: ((value: boolean) => void) | null = null;
 
 export function confirmAction(title: string, message: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     _resolve = resolve;
-    _setConfirm?.({ title, message });
+    _activeContainer?.setConfirm({ title, message });
   });
 }
 
 export function ConfirmModalContainer() {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  _setConfirm = setConfirm;
 
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -65,8 +64,10 @@ export function ConfirmModalContainer() {
   }, [confirm, close]);
 
   useEffect(() => {
+    const container = { setConfirm };
+    _activeContainer = container;
     return () => {
-      _setConfirm = null;
+      if (_activeContainer === container) _activeContainer = null;
     };
   }, []);
 

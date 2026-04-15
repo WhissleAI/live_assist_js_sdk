@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, Component } from "react";
 import type { GapAnalysis } from "./lib/prep";
 import type { AnswerScore } from "./lib/scoring";
 import type { Difficulty } from "./lib/roles";
@@ -7,6 +7,37 @@ import SetupScreen from "./components/SetupScreen";
 import PrepBrief from "./components/PrepBrief";
 import InterviewSession from "./components/InterviewSession";
 import SessionReport from "./components/SessionReport";
+
+class ErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="error-boundary" role="alert">
+          <h1 className="error-boundary-title">Something went wrong</h1>
+          <p className="error-boundary-message">
+            {this.state.error?.message || "An unexpected error occurred."}
+          </p>
+          <button
+            className="error-boundary-btn"
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+          >
+            Reload App
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export interface InterviewConfig {
   jdText: string;
@@ -17,18 +48,19 @@ export interface InterviewConfig {
   agentUrl: string;
 }
 
-export interface EmotionTimelineEntry {
-  offset: number;
-  emotion: string;
-  confidence: number;
-}
-
 type Phase = "setup" | "prep" | "interview" | "report";
 
 function detectAsrUrl(): string {
   const params = new URLSearchParams(window.location.search);
   const override = params.get("asr");
   if (override) return override;
+
+  const gateway = import.meta.env.VITE_GATEWAY_URL as string | undefined;
+  if (gateway) {
+    const wsProto = gateway.startsWith("https") ? "wss:" : "ws:";
+    const host = gateway.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    return `${wsProto}//${host}/asr/stream`;
+  }
 
   const loc = window.location;
   const wsProto = loc.protocol === "https:" ? "wss:" : "ws:";
@@ -43,11 +75,14 @@ function detectAgentUrl(): string {
   const override = params.get("agent");
   if (override) return override;
 
+  const gateway = import.meta.env.VITE_GATEWAY_URL as string | undefined;
+  if (gateway) return gateway.replace(/\/+$/, "") + "/agent";
+
   const loc = window.location;
   if (loc.port === "5173" || loc.port === "5174") {
     return `${loc.protocol}//${loc.hostname}:8765`;
   }
-  return `${loc.protocol}//${loc.host}`;
+  return `${loc.protocol}//${loc.host}/agent`;
 }
 
 export default function App() {
@@ -105,8 +140,10 @@ export default function App() {
     }
   }, [config]);
 
+  let content: React.ReactNode;
+
   if (phase === "prep") {
-    return (
+    content = (
       <PrepBrief
         config={config}
         onDone={handlePrepDone}
@@ -114,35 +151,32 @@ export default function App() {
         onBack={() => setPhase("setup")}
       />
     );
-  }
-
-  if (phase === "interview") {
-    return (
+  } else if (phase === "interview") {
+    content = (
       <InterviewSession
         config={config}
         gapAnalysis={gapAnalysis}
         onEnd={handleInterviewEnd}
       />
     );
-  }
-
-  if (phase === "report") {
-    return (
+  } else if (phase === "report") {
+    content = (
       <SessionReport
         config={config}
         answers={answers}
         endData={endData}
-        gapAnalysis={gapAnalysis}
         onBackToSetup={handleBackToSetup}
         onNewSession={handleNewSession}
       />
     );
+  } else {
+    content = (
+      <SetupScreen
+        initialConfig={config}
+        onDone={handleSetupDone}
+      />
+    );
   }
 
-  return (
-    <SetupScreen
-      initialConfig={config}
-      onDone={handleSetupDone}
-    />
-  );
+  return <ErrorBoundary>{content}</ErrorBoundary>;
 }

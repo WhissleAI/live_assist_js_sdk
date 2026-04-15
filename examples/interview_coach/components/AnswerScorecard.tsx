@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import type { AnswerScore } from "../lib/scoring";
-import { highlightFillers } from "../lib/fillers";
 
 interface Props {
   answer: AnswerScore;
@@ -10,18 +9,62 @@ interface Props {
 }
 
 function contentLabel(score: number): { text: string; color: string } {
-  if (score >= 80) return { text: "Excellent", color: "var(--color-green)" };
-  if (score >= 65) return { text: "Good", color: "var(--color-green)" };
-  if (score >= 50) return { text: "Acceptable", color: "var(--color-amber)" };
-  if (score >= 35) return { text: "Weak", color: "var(--color-amber)" };
-  return { text: "Poor", color: "var(--color-red)" };
+  if (score >= 80) return { text: "Excellent", color: "var(--color-success)" };
+  if (score >= 65) return { text: "Good", color: "var(--color-success)" };
+  if (score >= 50) return { text: "Acceptable", color: "var(--color-warning)" };
+  if (score >= 35) return { text: "Weak", color: "var(--color-warning)" };
+  return { text: "Poor", color: "var(--color-danger)" };
 }
 
 function deliveryLabel(score: number): { text: string; color: string } {
-  if (score >= 75) return { text: "Strong delivery", color: "var(--color-green)" };
-  if (score >= 55) return { text: "Decent delivery", color: "var(--color-green)" };
-  if (score >= 40) return { text: "Needs work", color: "var(--color-amber)" };
-  return { text: "Weak delivery", color: "var(--color-red)" };
+  if (score >= 75) return { text: "Strong delivery", color: "var(--color-success)" };
+  if (score >= 55) return { text: "Decent delivery", color: "var(--color-success)" };
+  if (score >= 40) return { text: "Needs work", color: "var(--color-warning)" };
+  return { text: "Weak delivery", color: "var(--color-danger)" };
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function FillerHighlightedText({ text, fillerBreakdown }: { text: string; fillerBreakdown: Record<string, number> }) {
+  const parts = useMemo(() => {
+    const fillers = Object.keys(fillerBreakdown ?? {});
+    if (fillers.length === 0) return [{ text, isFiller: false }];
+
+    // Build regex from actual detected fillers, longest first to avoid partial matches
+    const sorted = fillers.sort((a, b) => b.length - a.length);
+    const pattern = sorted.map((f) => `\\b${escapeRegex(f)}\\b`).join("|");
+    const regex = new RegExp(pattern, "gi");
+
+    const result: Array<{ text: string; isFiller: boolean }> = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        result.push({ text: text.slice(lastIndex, match.index), isFiller: false });
+      }
+      result.push({ text: match[0], isFiller: true });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      result.push({ text: text.slice(lastIndex), isFiller: false });
+    }
+    return result;
+  }, [text, fillerBreakdown]);
+
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.isFiller ? (
+          <mark key={i} className="filler-highlight">{p.text}</mark>
+        ) : (
+          <span key={i}>{p.text}</span>
+        )
+      )}
+    </>
+  );
 }
 
 export default function AnswerScorecard({ answer, compact, isWeakest, isStrongest }: Props) {
@@ -46,7 +89,7 @@ export default function AnswerScorecard({ answer, compact, isWeakest, isStronges
 
   return (
     <div className={`answer-card ${isWeakest ? "answer-card--weakest" : ""} ${isStrongest ? "answer-card--strongest" : ""}`}>
-      <div className="answer-card-header" onClick={() => setExpanded(!expanded)}>
+      <div className="answer-card-header" role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setExpanded(!expanded)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}>
         <div className="answer-card-left">
           <span className="answer-card-qnum">Q{answer.questionIndex + 1}</span>
           <div className="answer-card-question">
@@ -63,6 +106,10 @@ export default function AnswerScorecard({ answer, compact, isWeakest, isStronges
 
       {expanded && (
         <div className="answer-card-body">
+          {answer.questionText.length > 120 && (
+            <p className="answer-card-full-question">{answer.questionText}</p>
+          )}
+
           {answer.whatInterviewerThinks && (
             <div className="answer-card-interviewer-thinks">
               <span className="answer-card-thinks-icon">💭</span>
@@ -117,16 +164,36 @@ export default function AnswerScorecard({ answer, compact, isWeakest, isStronges
           {hasTranscript && (
             <div className="answer-card-transcript">
               <span className="answer-card-section-label">Your transcript</span>
-              <div
-                className="answer-card-transcript-text"
-                dangerouslySetInnerHTML={{ __html: highlightFillers(answer.answerText) }}
-              />
+              <div className="answer-card-transcript-text">
+                <FillerHighlightedText text={answer.answerText} fillerBreakdown={answer.fillerBreakdown} />
+              </div>
               <div className="answer-card-transcript-meta">
                 {answer.delivery.avgPaceWPM > 0 && <span>{answer.delivery.avgPaceWPM} wpm</span>}
                 <span>{Math.round(answer.delivery.durationSec)}s</span>
                 {answer.delivery.fillerCount > 0 && <span>{answer.delivery.fillerCount} fillers</span>}
                 <span>Structure: {answer.structure}</span>
+                {answer.vocalStability < 100 && <span>Stability: {answer.vocalStability}%</span>}
+                {answer.intentPattern !== "balanced" && <span>Tone: {answer.intentPattern}</span>}
               </div>
+              {(answer.convictionMoments > 0 || answer.microNervousMoments > 0 || answer.intentShift) && (
+                <div className="answer-card-voice-insights">
+                  {answer.convictionMoments > 0 && (
+                    <span className="answer-card-voice-tag answer-card-voice-tag--positive">
+                      {answer.convictionMoments} conviction moment{answer.convictionMoments > 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {answer.microNervousMoments > 0 && (
+                    <span className="answer-card-voice-tag answer-card-voice-tag--negative">
+                      {answer.microNervousMoments} nervous spike{answer.microNervousMoments > 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {answer.intentShift && (
+                    <span className="answer-card-voice-tag answer-card-voice-tag--neutral">
+                      Tone shift: {answer.intentShift}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

@@ -1,15 +1,24 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   build: {
     minify: "esbuild",
-    // Strip console.log/warn/debug in production to avoid leaking data
     target: "es2020",
+    sourcemap: "hidden",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor": ["react", "react-dom"],
+        },
+      },
+    },
   },
   esbuild: {
-    drop: process.env.NODE_ENV === "production" ? ["console", "debugger"] : [],
+    // Strip console.log/warn/info/debug in production but keep console.error
+    drop: mode === "production" ? ["debugger"] : [],
+    pure: mode === "production" ? ["console.log", "console.warn", "console.info", "console.debug"] : [],
   },
   server: {
     proxy: {
@@ -30,4 +39,4 @@ export default defineConfig({
   optimizeDeps: {
     include: ["react", "react-dom"],
   },
-});
+}));

@@ -81,13 +81,13 @@ export default function AgentList({ agents, onRefresh }: Props) {
                 )}
               </div>
               <div className="agent-card-actions-secondary">
-                <button type="button" className="btn btn--small btn--ghost" onClick={() => navigate("sessions")} title="Sessions">
+                <button type="button" className="btn btn--small btn--ghost" onClick={() => navigate("sessions")} title="Sessions" aria-label={`View sessions for ${agent.name}`}>
                   <Icon name="bar-chart" size={14} />
                 </button>
-                <button type="button" className="btn btn--small btn--ghost" onClick={() => handleDuplicate(agent.id)} title="Duplicate">
+                <button type="button" className="btn btn--small btn--ghost" onClick={() => handleDuplicate(agent.id)} title="Duplicate" aria-label={`Duplicate ${agent.name}`}>
                   <Icon name="copy" size={14} />
                 </button>
-                <button type="button" className="btn btn--small btn--ghost btn--danger-ghost" onClick={() => handleDelete(agent.id, agent.name)} title="Delete">
+                <button type="button" className="btn btn--small btn--ghost btn--danger-ghost" onClick={() => handleDelete(agent.id, agent.name)} title="Delete" aria-label={`Delete ${agent.name}`}>
                   <Icon name="trash" size={14} />
                 </button>
               </div>

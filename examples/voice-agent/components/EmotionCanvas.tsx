@@ -13,7 +13,7 @@ interface Props {
 export default function EmotionCanvas({ emotion, probs, isActive, breathSync }: Props) {
   const style = useMemo((): React.CSSProperties => {
     if (!isActive) {
-      return { background: "#f8fafc" };
+      return { background: "var(--color-bg, #f8fafc)" };
     }
 
     if (breathSync) {

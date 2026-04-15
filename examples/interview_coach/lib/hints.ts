@@ -29,21 +29,32 @@ export interface HintContext {
 }
 
 const MIN_INTERVAL_MS = 5000;
-let lastHintTime = 0;
-let shownHintIds = new Set<string>();
-let lastConfidence = 50;
 
-export function resetHintState(): void {
-  lastHintTime = 0;
-  shownHintIds = new Set();
-  lastConfidence = 50;
+export interface HintState {
+  lastHintTime: number;
+  shownHintIds: Set<string>;
+  lastConfidence: number;
 }
 
-export function generateDeliveryHints(ctx: HintContext): Hint[] {
+export function createHintState(): HintState {
+  return { lastHintTime: 0, shownHintIds: new Set(), lastConfidence: 50 };
+}
+
+/** @deprecated Use createHintState() instead. Kept for backward compat. */
+export function resetHintState(): void {
+  _compat.lastHintTime = 0;
+  _compat.shownHintIds = new Set();
+  _compat.lastConfidence = 50;
+}
+
+const _compat: HintState = createHintState();
+
+export function generateDeliveryHints(ctx: HintContext, hintState?: HintState): Hint[] {
+  const hs = hintState ?? _compat;
   const hints: Hint[] = [];
   const now = Date.now();
-  const confidenceDelta = ctx.confidenceScore - lastConfidence;
-  lastConfidence = ctx.confidenceScore;
+  const confidenceDelta = ctx.confidenceScore - hs.lastConfidence;
+  hs.lastConfidence = ctx.confidenceScore;
 
   if (confidenceDelta < -15 && ctx.answerDurationSec > 3) {
     hints.push({ id: "d_dropping", type: "delivery", icon: "⚡", text: "Your confidence just dropped — take a breath and reset.", priority: 9, color: "red", createdAt: now });
@@ -200,11 +211,12 @@ export function generateContentHints(ctx: HintContext): Hint[] {
   return hints;
 }
 
-export function pickTopHints(allHints: Hint[], maxCount: number = 2): Hint[] {
+export function pickTopHints(allHints: Hint[], maxCount: number = 2, hintState?: HintState): Hint[] {
+  const hs = hintState ?? _compat;
   const now = Date.now();
 
   const eligible = allHints.filter((h) => {
-    if (shownHintIds.has(h.id) && h.color !== "red") return false;
+    if (hs.shownHintIds.has(h.id) && h.color !== "red") return false;
     return true;
   });
 
@@ -218,13 +230,13 @@ export function pickTopHints(allHints: Hint[], maxCount: number = 2): Hint[] {
 
     if (seenTypes.has(hint.type) && hint.type !== "meta") continue;
 
-    if (now - lastHintTime < MIN_INTERVAL_MS && hint.priority < 8) continue;
+    if (now - hs.lastHintTime < MIN_INTERVAL_MS && hint.priority < 8) continue;
 
     picked.push(hint);
-    shownHintIds.add(hint.id);
+    hs.shownHintIds.add(hint.id);
     seenTypes.add(hint.type);
   }
 
-  if (picked.length > 0) lastHintTime = now;
+  if (picked.length > 0) hs.lastHintTime = now;
   return picked;
 }

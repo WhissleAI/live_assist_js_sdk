@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { loadSessions, deleteSession } from "../lib/session-store";
 import { deleteAudio } from "../lib/audio-store";
 import { loadAgents } from "../lib/agent-store";
@@ -44,9 +44,12 @@ export default function SessionsPage() {
   const agents = useMemo(() => loadAgents(), [refreshKey]);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const [filterAgent, setFilterAgent] = useState("all");
   const [filterDate, setFilterDate] = useState("");
   const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const uniqueAgents = useMemo(() => {
     const map = new Map<string, string>();
@@ -61,7 +64,10 @@ export default function SessionsPage() {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter((s) =>
-        s.transcript.some((seg) => seg.text.toLowerCase().includes(q))
+        s.transcript.some((seg) => seg.text.toLowerCase().includes(q)) ||
+        (s.agentName && s.agentName.toLowerCase().includes(q)) ||
+        s.topicsDiscussed.some((t) => t.toLowerCase().includes(q)) ||
+        (s.emotionSummary?.dominant && s.emotionSummary.dominant.toLowerCase().includes(q))
       );
     }
     if (filterAgent !== "all") {
@@ -86,13 +92,48 @@ export default function SessionsPage() {
     deleteSession(sessionId);
     deleteAudio(sessionId).catch(() => {});
     showToast("Session deleted", "success");
+    setSelected((prev) => { const next = new Set(prev); next.delete(sessionId); return next; });
     setRefreshKey((k) => k + 1);
   }, []);
+
+  const toggleSelect = useCallback((id: string, e: React.MouseEvent | React.ChangeEvent) => {
+    e.stopPropagation();
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    const ids = filtered.map((s) => s.id);
+    setSelected((prev) => prev.size === ids.length ? new Set() : new Set(ids));
+  }, [filtered]);
+
+  const handleBatchDelete = useCallback(async () => {
+    if (selected.size === 0) return;
+    if (!(await confirmAction(`Delete ${selected.size} session${selected.size > 1 ? "s" : ""}?`, "This cannot be undone."))) return;
+    for (const id of selected) {
+      deleteSession(id);
+      deleteAudio(id).catch(() => {});
+    }
+    showToast(`${selected.size} session${selected.size > 1 ? "s" : ""} deleted`, "success");
+    setSelected(new Set());
+    setRefreshKey((k) => k + 1);
+  }, [selected]);
 
   // Reset page when filters change
   const handleFilterAgent = useCallback((val: string) => { setFilterAgent(val); setPage(0); }, []);
   const handleFilterDate = useCallback((val: string) => { setFilterDate(val); setPage(0); }, []);
-  const handleSearch = useCallback((val: string) => { setSearchQuery(val); setPage(0); }, []);
+  const handleSearchInput = useCallback((val: string) => {
+    setSearchInput(val);
+    clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearchQuery(val);
+      setPage(0);
+    }, 250);
+  }, []);
+  useEffect(() => () => clearTimeout(searchTimerRef.current), []);
 
   return (
     <div className="studio-page">
@@ -115,8 +156,8 @@ export default function SessionsPage() {
               type="text"
               className="sessions-search-input"
               placeholder="Search transcripts..."
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => handleSearchInput(e.target.value)}
             />
           </div>
 
@@ -137,7 +178,7 @@ export default function SessionsPage() {
               <button
                 type="button"
                 className="btn btn--ghost btn--small"
-                onClick={() => { handleFilterAgent("all"); handleFilterDate(""); handleSearch(""); }}
+                onClick={() => { handleFilterAgent("all"); handleFilterDate(""); setSearchInput(""); setSearchQuery(""); setPage(0); }}
               >
                 Clear filters
               </button>
@@ -154,9 +195,25 @@ export default function SessionsPage() {
             </span>
           </div>
 
+          {/* Batch actions bar */}
+          {selected.size > 0 && (
+            <div className="sessions-batch-bar">
+              <span>{selected.size} selected</span>
+              <button type="button" className="btn btn--small btn--ghost" onClick={selectAll}>
+                {selected.size === filtered.length ? "Deselect all" : "Select all"}
+              </button>
+              <button type="button" className="btn btn--small btn--danger" onClick={handleBatchDelete}>
+                <Icon name="trash" size={13} /> Delete selected
+              </button>
+              <button type="button" className="btn btn--small btn--ghost" onClick={() => setSelected(new Set())}>
+                Cancel
+              </button>
+            </div>
+          )}
+
           <div className="session-card-grid">
             {pageSlice.map((s) => (
-              <SessionCard key={s.id} session={s} onDelete={handleDelete} />
+              <SessionCard key={s.id} session={s} onDelete={handleDelete} isSelected={selected.has(s.id)} onToggleSelect={toggleSelect} />
             ))}
           </div>
 
@@ -189,14 +246,31 @@ export default function SessionsPage() {
   );
 }
 
-function SessionCard({ session, onDelete }: { session: StoredSession; onDelete: (id: string, e: React.MouseEvent) => void }) {
+function SessionCard({ session, onDelete, isSelected, onToggleSelect }: { session: StoredSession; onDelete: (id: string, e: React.MouseEvent) => void; isSelected?: boolean; onToggleSelect?: (id: string, e: React.MouseEvent | React.ChangeEvent) => void }) {
   const emoColor = EMOTION_COLORS[session.emotionSummary?.dominant] ?? "#9ca3af";
   const dominant = session.emotionSummary?.dominant ?? "NEUTRAL";
 
   return (
-    <div className="session-card" onClick={() => navigate(`sessions/${session.id}`)}>
+    <div
+      className={`session-card ${isSelected ? "session-card--selected" : ""}`}
+      onClick={() => navigate(`sessions/${session.id}`)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(`sessions/${session.id}`); } }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Session with ${session.agentName || "Agent"} on ${formatDate(session.date)}`}
+    >
       <div className="session-card-header">
-        <span className="session-card-agent">{session.agentName || "Agent"}</span>
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            className="session-card-checkbox"
+            checked={isSelected ?? false}
+            onChange={(e) => onToggleSelect(session.id, e)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Select session"
+          />
+        )}
+        <span className="session-card-agent">{session.customName || session.agentName || "Agent"}</span>
         <div className="session-card-actions">
           <span className="session-card-date">
             {formatDate(session.date)} · {formatTime(session.date)}

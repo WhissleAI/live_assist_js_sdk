@@ -9,6 +9,8 @@ export default defineConfig({
     proxy: {
       "/asr/stream": { target: "ws://localhost:8001", ws: true },
       "/voice-agent": { target: "http://localhost:8765" },
+      "/tts": { target: "ws://localhost:8765", ws: true },
+      "/interview-coach": { target: "http://localhost:8765" },
     },
   },
   resolve: {

@@ -1,3 +1,5 @@
+export const TOTAL_QUESTIONS = 6;
+
 export interface ToolDefinition {
   type: "function";
   function: {
@@ -119,7 +121,7 @@ ${gapAnalysis || "Not available"}
 ${difficultyInstructions[difficulty]}
 
 ## INTERVIEW FLOW
-1. Ask 6 questions total, one at a time:
+1. Ask ${TOTAL_QUESTIONS} questions total, one at a time:
    - Q1: "Tell me about yourself" (intro warm-up)
    - Q2-Q3: Behavioral questions targeting resume gaps or JD requirements
    - Q4: Technical or system design question relevant to the JD

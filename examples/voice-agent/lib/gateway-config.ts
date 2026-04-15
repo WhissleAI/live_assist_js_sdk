@@ -26,19 +26,10 @@ const wsBase = gatewayBase.replace(/^http/, "ws");
 
 const SESSION_KEY = "whissle_session_token";
 let _sessionToken: string | null = null;
+let _sessionExpires = 0;
+let _refreshPromise: Promise<string> | null = null;
 
-async function initSession(): Promise<string> {
-  const cached = sessionStorage.getItem(SESSION_KEY);
-  if (cached) {
-    try {
-      const { token, expires } = JSON.parse(cached);
-      if (Date.now() / 1000 < expires - 300) {
-        _sessionToken = token;
-        return token;
-      }
-    } catch {}
-  }
-
+async function fetchSessionToken(): Promise<string> {
   const deviceId = getDeviceId();
   try {
     const res = await fetch(`${gatewayBase}/session/init`, {
@@ -49,6 +40,7 @@ async function initSession(): Promise<string> {
     if (res.ok) {
       const data = await res.json();
       _sessionToken = data.session_token;
+      _sessionExpires = data.expires_at ?? 0;
       sessionStorage.setItem(SESSION_KEY, JSON.stringify({
         token: data.session_token,
         expires: data.expires_at,
@@ -61,7 +53,29 @@ async function initSession(): Promise<string> {
   return "";
 }
 
+async function initSession(): Promise<string> {
+  const cached = sessionStorage.getItem(SESSION_KEY);
+  if (cached) {
+    try {
+      const { token, expires } = JSON.parse(cached);
+      if (Date.now() / 1000 < expires - 300) {
+        _sessionToken = token;
+        _sessionExpires = expires;
+        return token;
+      }
+    } catch {}
+  }
+
+  return fetchSessionToken();
+}
+
 function getSessionToken(): string {
+  // Auto-refresh if token is expired or about to expire (within 5 min)
+  if (_sessionToken && _sessionExpires > 0 && Date.now() / 1000 >= _sessionExpires - 300) {
+    if (!_refreshPromise) {
+      _refreshPromise = fetchSessionToken().finally(() => { _refreshPromise = null; });
+    }
+  }
   return _sessionToken || "";
 }
 

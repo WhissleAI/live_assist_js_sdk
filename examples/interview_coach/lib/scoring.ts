@@ -26,6 +26,11 @@ export interface AnswerScore {
   suggestedReframe: string;
   behavioralNarrative: string[];
   fillerBreakdown: Record<string, number>;
+  vocalStability: number;
+  convictionMoments: number;
+  microNervousMoments: number;
+  intentPattern: string;
+  intentShift: string | null;
 }
 
 export function computeDeliveryMetrics(
@@ -56,8 +61,10 @@ export function computeDeliveryMetrics(
   const totalIntents = assertiveCount + passiveCount;
   const assertiveness = totalIntents > 0 ? Math.round((assertiveCount / totalIntents) * 100) : 50;
 
-  const energy = totalWeight > 0 ? Math.round((happySurpriseWeight / totalWeight) * 100 + 30) : 50;
-  const clampedEnergy = Math.min(100, Math.max(0, energy));
+  // Scale energy across 0–100 with a small baseline (10) to avoid "dead zero"
+  // when no happy/surprise detected but the candidate is still speaking
+  const rawEnergy = totalWeight > 0 ? (happySurpriseWeight / totalWeight) * 90 + 10 : 50;
+  const clampedEnergy = Math.min(100, Math.max(0, Math.round(rawEnergy)));
 
   const avgPace = paceReadings.length > 0
     ? Math.round(paceReadings.reduce((a, b) => a + b, 0) / paceReadings.length)
@@ -202,11 +209,3 @@ export function identifyKeyMoments(
   return moments.slice(0, 4);
 }
 
-export function computeVerdict(answers: AnswerScore[]): { label: string; color: string } {
-  const score = computeReadinessScore(answers);
-  if (score >= 80) return { label: "Strong Hire", color: "var(--color-green)" };
-  if (score >= 65) return { label: "Hire", color: "var(--color-green)" };
-  if (score >= 50) return { label: "Lean Hire", color: "var(--color-amber)" };
-  if (score >= 35) return { label: "Lean No Hire", color: "var(--color-amber)" };
-  return { label: "No Hire", color: "var(--color-red)" };
-}

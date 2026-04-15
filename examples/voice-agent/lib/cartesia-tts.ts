@@ -2,13 +2,14 @@
  * Cartesia TTS WebSocket client — direct browser connection with emotion control.
  *
  * Architecture:
- *   Browser WS → Cartesia API → JSON {data: base64 pcm_f32le} → decode → ring buffer
- *   → ScriptProcessor → Gain → Compressor → speakers
+ *   Browser WS → Cartesia API → JSON {data: base64 pcm_f32le} → decode
+ *   → AudioWorkletNode (ring buffer) → Compressor → Gain → Analyser → speakers
  *
- * The ring buffer + ScriptProcessor approach guarantees click-free playback
- * (no AudioBuffer boundary artifacts). A continuous process() callback pulls
- * samples from the ring buffer. New PCM chunks from Cartesia are appended
- * to the write side.
+ * The AudioWorklet approach guarantees click-free playback on the audio thread
+ * (no main-thread jank). PCM chunks from Cartesia are posted to the worklet
+ * via MessagePort and written into a ring buffer there.
+ *
+ * Falls back to ScriptProcessorNode if AudioWorklet is unavailable.
  *
  * Key advantages over the gateway-proxied Rime path:
  *   1. Direct connection — eliminates proxy hop latency
@@ -137,7 +138,10 @@ export class CartesiaTtsClient {
   private gainNode: GainNode | null = null;
   private compressorNode: DynamicsCompressorNode | null = null;
   private analyserNode: AnalyserNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
+  /** Fallback for browsers without AudioWorklet support. */
   private processor: ScriptProcessorNode | null = null;
+  private useWorklet = false;
   private config: CartesiaTtsConfig;
   private _connected = false;
   private _speaking = false;
@@ -229,8 +233,6 @@ export class CartesiaTtsClient {
       this.audioCtx = new AudioCtx();
 
       // Compressor acts as a gentle limiter to tame peaks BEFORE the gain stage.
-      // Threshold -6 dB means most of the signal passes through untouched;
-      // only loud spikes get attenuated, preventing distortion after gain boost.
       this.compressorNode = this.audioCtx.createDynamicsCompressor();
       this.compressorNode.threshold.value = -6;
       this.compressorNode.knee.value = 10;
@@ -238,9 +240,7 @@ export class CartesiaTtsClient {
       this.compressorNode.attack.value = 0.002;
       this.compressorNode.release.value = 0.08;
 
-      // Gain AFTER the compressor — the previous order (gain → compressor)
-      // boosted the signal by 2.8x then immediately compressed it back down,
-      // wasting the boost. Post-compressor gain provides the actual volume lift.
+      // Gain AFTER the compressor — provides the actual volume lift.
       this.gainNode = this.audioCtx.createGain();
       this.gainNode.gain.value = this.targetGain;
 
@@ -248,11 +248,26 @@ export class CartesiaTtsClient {
       this.analyserNode.fftSize = 256;
       this.analyserNode.smoothingTimeConstant = 0.7;
 
-      this.processor = this.audioCtx.createScriptProcessor(PROC_BUFFER, 0, 1);
-      this.processor.onaudioprocess = (e) => this.processAudio(e);
+      // Try AudioWorklet first, fall back to ScriptProcessorNode
+      let sourceNode: AudioNode;
+      try {
+        await this.audioCtx.audioWorklet.addModule("/tts-playback-processor.js");
+        this.workletNode = new AudioWorkletNode(this.audioCtx, "tts-playback-processor", {
+          outputChannelCount: [1],
+        });
+        this.workletNode.port.onmessage = (e) => this.handleWorkletMessage(e);
+        this.useWorklet = true;
+        sourceNode = this.workletNode;
+      } catch {
+        // AudioWorklet not supported or module failed to load — use ScriptProcessorNode
+        this.processor = this.audioCtx.createScriptProcessor(PROC_BUFFER, 0, 1);
+        this.processor.onaudioprocess = (e) => this.processAudio(e);
+        this.useWorklet = false;
+        sourceNode = this.processor;
+      }
 
-      // Audio graph: processor → compressor (limiter) → gain (volume boost) → analyser → destination
-      this.processor.connect(this.compressorNode);
+      // Audio graph: source → compressor (limiter) → gain (volume boost) → analyser → destination
+      sourceNode.connect(this.compressorNode);
       this.compressorNode.connect(this.gainNode);
       this.gainNode.connect(this.analyserNode);
       this.analyserNode.connect(this.audioCtx.destination);
@@ -264,6 +279,28 @@ export class CartesiaTtsClient {
       await this.audioCtx.resume().catch(() => {});
     }
     return this.audioCtx;
+  }
+
+  private handleWorkletMessage(e: MessageEvent) {
+    const { type } = e.data;
+    if (type === "bufferEmpty") {
+      this.scheduleSilenceCheck();
+    } else if (type === "playing") {
+      this.lastSampleTime = performance.now();
+      this.setSpeaking(true);
+      if (this.silenceTimer) {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+      }
+    } else if (type === "pcmTap" && this.pcmTapCallback) {
+      const float32: Float32Array = e.data.samples;
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      try { this.pcmTapCallback(int16); } catch {}
+    }
   }
 
   private processAudio(e: AudioProcessingEvent) {
@@ -335,6 +372,21 @@ export class CartesiaTtsClient {
   }
 
   private pushToRing(samples: Float32Array) {
+    if (this.useWorklet && this.workletNode) {
+      // Post audio data to the worklet's ring buffer on the audio thread
+      this.workletNode.port.postMessage(
+        { type: "audio", samples },
+        [samples.buffer],
+      );
+      this.setSpeaking(true);
+      if (this.silenceTimer) {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+      }
+      return;
+    }
+
+    // Fallback: main-thread ring buffer for ScriptProcessorNode
     const free = RING_SIZE - 1 - this.ringAvailable();
     if (samples.length > free) {
       const skip = samples.length - free;
@@ -572,6 +624,9 @@ export class CartesiaTtsClient {
 
   mute() {
     this._muted = true;
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({ type: "mute" });
+    }
     if (this.gainNode && this.audioCtx) {
       this.gainNode.gain.cancelScheduledValues(this.audioCtx.currentTime);
       this.gainNode.gain.linearRampToValueAtTime(0, this.audioCtx.currentTime + 0.15);
@@ -581,6 +636,9 @@ export class CartesiaTtsClient {
 
   unmute() {
     this._muted = false;
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({ type: "unmute" });
+    }
     if (this.gainNode && this.audioCtx) {
       this.gainNode.gain.cancelScheduledValues(this.audioCtx.currentTime);
       this.gainNode.gain.linearRampToValueAtTime(this.targetGain, this.audioCtx.currentTime + 0.1);
@@ -659,6 +717,9 @@ export class CartesiaTtsClient {
     }
     this.activeContexts.clear();
 
+    if (this.workletNode) {
+      this.workletNode.port.postMessage({ type: "clear" });
+    }
     this.ringRead = 0;
     this.ringWrite = 0;
     this.wasPlaying = false;
@@ -675,6 +736,10 @@ export class CartesiaTtsClient {
     this._closed = true;
     this.pendingQueue = [];
     this.clear();
+    if (this.workletNode) {
+      this.workletNode.disconnect();
+      this.workletNode = null;
+    }
     if (this.processor) {
       this.processor.disconnect();
       this.processor = null;

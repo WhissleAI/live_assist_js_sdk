@@ -9,6 +9,9 @@ const TYPE_LABELS: Record<string, string> = {
   delivery: "Delivery",
   content: "Content",
   meta: "Insight",
+  alignment: "JD Fit",
+  pause: "Pacing",
+  stability: "Voice",
 };
 
 export default function HintPanel({ hints }: Props) {
@@ -30,7 +33,7 @@ export default function HintPanel({ hints }: Props) {
 
   if (visible.length === 0) {
     return (
-      <div className="hint-panel">
+      <div className="hint-panel" role="region" aria-label="Coaching hints" aria-live="polite">
         <div className="hint-panel-header">
           <span className="hint-panel-title">Coaching Hints</span>
         </div>
@@ -40,7 +43,7 @@ export default function HintPanel({ hints }: Props) {
   }
 
   return (
-    <div className="hint-panel">
+    <div className="hint-panel" role="region" aria-label="Coaching hints" aria-live="polite">
       <div className="hint-panel-header">
         <span className="hint-panel-title">Coaching Hints</span>
       </div>

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { InterviewConfig } from "../App";
 import type { GapAnalysis } from "../lib/prep";
 import type { AnswerScore } from "../lib/scoring";
-import type { ToolCallResult } from "../lib/tools";
+import { TOTAL_QUESTIONS, type ToolCallResult } from "../lib/roles";
 import { useInterviewSession } from "../hooks/useInterviewSession";
 import ConfidencePulse from "./ConfidencePulse";
 import HintPanel from "./HintPanel";
@@ -33,6 +33,7 @@ function useScrollToBottom(dep: unknown) {
 
 export default function InterviewSession({ config, gapAnalysis, onEnd }: Props) {
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const handleAutoEnd = useCallback((answers: AnswerScore[], endData: ToolCallResult | null) => {
     onEnd(answers, endData);
@@ -72,9 +73,9 @@ export default function InterviewSession({ config, gapAnalysis, onEnd }: Props) 
     return (
       <div className="interview-root">
         <div className="interview-start-container">
-          <div className="interview-start-icon">🎯</div>
+          <div className="interview-start-icon">W</div>
           <h1>Ready to Practice</h1>
-          <p>Your mic will be used for speech recognition. The AI interviewer will ask 6 questions tailored to your profile.</p>
+          <p>Your mic will be used for speech recognition. The AI interviewer will ask {TOTAL_QUESTIONS} questions tailored to your profile.</p>
           {config.hintsEnabled && <p className="interview-hint-info">Real-time coaching hints are enabled</p>}
           <button type="button" className="interview-start-btn" onClick={start} disabled={state.isProcessing}>
             {state.isProcessing ? "Setting up..." : "Begin Interview"}
@@ -95,19 +96,22 @@ export default function InterviewSession({ config, gapAnalysis, onEnd }: Props) 
           <div className="interview-header-bar">
             <div className="interview-progress">
               <span className="interview-q-label">
-                Question {Math.min(state.questionIndex + 1, 6)} of 6
+                Question {Math.min(state.questionIndex + 1, TOTAL_QUESTIONS)} of {TOTAL_QUESTIONS}
               </span>
               <div className="interview-progress-track">
-                <div className="interview-progress-fill" style={{ width: `${(Math.min(state.questionIndex + 1, 6) / 6) * 100}%` }} />
+                <div className="interview-progress-fill" style={{ width: `${(Math.min(state.questionIndex + 1, TOTAL_QUESTIONS) / TOTAL_QUESTIONS) * 100}%` }} />
               </div>
             </div>
+            <span className="interview-elapsed" aria-label={`Elapsed: ${Math.floor(state.sessionElapsedSec / 60)}m ${state.sessionElapsedSec % 60}s`}>
+              {Math.floor(state.sessionElapsedSec / 60)}:{(state.sessionElapsedSec % 60).toString().padStart(2, "0")}
+            </span>
             <ConfidencePulse score={state.confidenceScore} emotion={state.currentEmotion} />
           </div>
 
           <div className={`interview-agent-area ${isAgentTurn ? "interview-agent-area--speaking" : ""}`}>
             <div className="interview-agent-avatar">
               <div className={`interview-avatar-ring ${isAgentTurn ? "interview-avatar-ring--pulse" : ""}`} />
-              <span className="interview-avatar-icon">🎙</span>
+              <span className="interview-avatar-icon">AI</span>
             </div>
             <div className="interview-agent-text" ref={agentTextRef}>
               {state.agentText || (
@@ -171,7 +175,18 @@ export default function InterviewSession({ config, gapAnalysis, onEnd }: Props) 
           {state.error && <p className="interview-error">{state.error}</p>}
         </div>
 
-        <div className="interview-sidebar">
+        <button
+          type="button"
+          className="interview-sidebar-toggle"
+          onClick={() => setSidebarOpen((v) => !v)}
+          aria-label={sidebarOpen ? "Hide coaching panel" : "Show coaching panel"}
+        >
+          {sidebarOpen ? "✕" : "📊"}
+        </button>
+
+        {sidebarOpen && <div className="interview-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+
+        <div className={`interview-sidebar ${sidebarOpen ? "interview-sidebar--open" : ""}`}>
           <DeliveryMeter
             confidence={state.confidenceScore}
             paceWPM={state.speakingPaceWPM}

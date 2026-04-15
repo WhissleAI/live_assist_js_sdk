@@ -1,6 +1,5 @@
-import type { ToolDefinition, ToolCallResult } from "./tools";
-
-export type { ToolDefinition, ToolCallResult };
+import type { ToolDefinition, ToolCallResult } from "./roles";
+import { getDeviceId } from "./device-id";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -31,6 +30,7 @@ export async function* streamAgentChat(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      "X-Device-Id": getDeviceId(),
     },
     body: JSON.stringify(body),
     signal,

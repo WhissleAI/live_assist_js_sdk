@@ -1,20 +1,12 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { gatewayConfig } from "../lib/gateway-config";
 import { getDeviceId } from "../lib/device-id";
+import { loadAgents, saveAgent } from "../lib/agent-store";
+import type { AgentConfig } from "../lib/agent-config";
+import { getStoredTheme, saveTheme, THEME_OPTIONS } from "../lib/theme";
 import Icon from "./Icon";
 import { showToast } from "./Toast";
 import { confirmAction } from "./ConfirmModal";
-
-const THEME_KEY = "whissle_theme";
-const THEME_OPTIONS = ["system", "light", "dark"] as const;
-
-function applyTheme(theme: string) {
-  if (theme === "system") {
-    document.documentElement.removeAttribute("data-theme");
-  } else {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-}
 
 interface Preferences {
   language: string;
@@ -22,13 +14,19 @@ interface Preferences {
 }
 
 export default function SettingsPage() {
-  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || "system");
+  const [theme, setTheme] = useState(getStoredTheme);
   const [language, setLanguage] = useState("en");
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone
   );
   const [prefsLoading, setPrefsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Track server-loaded values to detect dirty state
+  const [savedLanguage, setSavedLanguage] = useState("en");
+  const [savedTimezone, setSavedTimezone] = useState(
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  );
+  const prefsDirty = language !== savedLanguage || timezone !== savedTimezone;
 
   const deviceId = getDeviceId();
 
@@ -48,8 +46,8 @@ export default function SettingsPage() {
       );
       if (res.ok) {
         const data: Preferences = await res.json();
-        if (data.language) setLanguage(data.language);
-        if (data.timezone) setTimezone(data.timezone);
+        if (data.language) { setLanguage(data.language); setSavedLanguage(data.language); }
+        if (data.timezone) { setTimezone(data.timezone); setSavedTimezone(data.timezone); }
       }
     } catch {
       // Non-critical — use defaults
@@ -64,8 +62,7 @@ export default function SettingsPage() {
 
   // Apply theme whenever it changes
   useEffect(() => {
-    applyTheme(theme);
-    localStorage.setItem(THEME_KEY, theme);
+    saveTheme(theme as "system" | "light" | "dark");
   }, [theme]);
 
   const handleSave = useCallback(async () => {
@@ -95,6 +92,8 @@ export default function SettingsPage() {
         throw new Error(`Failed to save (${res.status})`);
       }
 
+      setSavedLanguage(language);
+      setSavedTimezone(timezone);
       showToast("Preferences saved", "success");
     } catch (err: unknown) {
       showToast((err as Error).message || "Failed to save preferences", "error");
@@ -152,14 +151,38 @@ export default function SettingsPage() {
     "America/Los_Angeles",
     "America/Anchorage",
     "Pacific/Honolulu",
+    "America/Toronto",
+    "America/Vancouver",
+    "America/Mexico_City",
+    "America/Sao_Paulo",
+    "America/Argentina/Buenos_Aires",
     "Europe/London",
     "Europe/Paris",
     "Europe/Berlin",
-    "Asia/Tokyo",
-    "Asia/Shanghai",
+    "Europe/Amsterdam",
+    "Europe/Madrid",
+    "Europe/Rome",
+    "Europe/Zurich",
+    "Europe/Stockholm",
+    "Europe/Moscow",
+    "Europe/Istanbul",
+    "Asia/Dubai",
+    "Asia/Riyadh",
     "Asia/Kolkata",
+    "Asia/Singapore",
+    "Asia/Bangkok",
+    "Asia/Hong_Kong",
+    "Asia/Shanghai",
+    "Asia/Tokyo",
+    "Asia/Seoul",
+    "Asia/Jakarta",
     "Australia/Sydney",
+    "Australia/Melbourne",
+    "Australia/Perth",
     "Pacific/Auckland",
+    "Africa/Cairo",
+    "Africa/Johannesburg",
+    "Africa/Lagos",
   ];
 
   // Ensure current timezone is in the list
@@ -275,11 +298,32 @@ export default function SettingsPage() {
               type="button"
               className="btn btn--primary"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || !prefsDirty}
             >
-              {saving ? "Saving..." : "Save Preferences"}
+              {saving ? "Saving..." : prefsDirty ? "Save Preferences" : "Preferences Saved"}
             </button>
           </div>
+
+          {/* Gateway */}
+          <div className="settings-section">
+            <h2 className="settings-section-title">
+              <Icon name="link" size={18} />
+              Gateway
+            </h2>
+            <div className="settings-field">
+              <label className="settings-label">Gateway URL</label>
+              <input
+                type="text"
+                className="settings-input settings-input--readonly"
+                value={gatewayConfig.httpBase}
+                readOnly
+              />
+              <span className="settings-hint">Set via VITE_GATEWAY_URL at build time.</span>
+            </div>
+          </div>
+
+          {/* Agent Data */}
+          <AgentDataSection />
 
           {/* Data management */}
           <div className="settings-section">
@@ -306,8 +350,100 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
+
+          {/* Keyboard Shortcuts */}
+          <div className="settings-section">
+            <h2 className="settings-section-title">
+              <Icon name="zap" size={18} />
+              Keyboard Shortcuts
+            </h2>
+            <div className="settings-shortcuts">
+              <div className="settings-shortcut-row">
+                <span className="settings-shortcut-keys"><kbd>Space</kbd></span>
+                <span>Play / pause session audio</span>
+              </div>
+              <div className="settings-shortcut-row">
+                <span className="settings-shortcut-keys"><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span>
+                <span>Seek audio backward / forward 5s</span>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentDataSection() {
+  const importRef = useRef<HTMLInputElement>(null);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+
+  const handleExportAgents = useCallback(() => {
+    const agents = loadAgents();
+    if (agents.length === 0) {
+      showToast("No agents to export", "error");
+      return;
+    }
+    const blob = new Blob([JSON.stringify(agents, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `whissle_agents_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Agents exported", "success");
+  }, []);
+
+  const handleImportAgents = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result as string);
+        if (!Array.isArray(parsed)) throw new Error("Expected an array of agent configs.");
+        let count = 0;
+        for (const agent of parsed) {
+          if (agent && typeof agent === "object" && agent.id && agent.name) {
+            saveAgent(agent as AgentConfig);
+            count++;
+          }
+        }
+        setImportMsg(`Imported ${count} agent${count !== 1 ? "s" : ""} successfully.`);
+        showToast(`Imported ${count} agent${count !== 1 ? "s" : ""}`, "success");
+      } catch (err) {
+        setImportMsg(`Import failed: ${(err as Error).message}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }, []);
+
+  return (
+    <div className="settings-section">
+      <h2 className="settings-section-title">
+        <Icon name="mic" size={18} />
+        Agent Data
+      </h2>
+      <p className="settings-hint" style={{ marginBottom: 12 }}>
+        Export your agent configurations as JSON for backup or transfer, or import agents from a file.
+      </p>
+      <div className="settings-data-actions">
+        <button type="button" className="btn btn--secondary" onClick={handleExportAgents}>
+          <Icon name="download" size={14} /> Export Agents
+        </button>
+        <button type="button" className="btn btn--secondary" onClick={() => importRef.current?.click()}>
+          <Icon name="upload" size={14} /> Import Agents
+        </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".json"
+          style={{ display: "none" }}
+          onChange={handleImportAgents}
+        />
+      </div>
+      {importMsg && <p className="settings-hint" style={{ marginTop: 8 }}>{importMsg}</p>}
     </div>
   );
 }

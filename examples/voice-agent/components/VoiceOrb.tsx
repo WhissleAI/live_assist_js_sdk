@@ -25,6 +25,10 @@ export default function VoiceOrb({ analyser, turn, emotion, agentName, isProcess
   const targetEmotionRef = useRef(emotion);
   const phaseRef = useRef(0);
   const freqDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const turnRef = useRef(turn);
+  const isProcessingRef = useRef(isProcessing);
+  turnRef.current = turn;
+  isProcessingRef.current = isProcessing;
 
   useEffect(() => {
     if (emotion !== targetEmotionRef.current) {
@@ -92,19 +96,22 @@ export default function VoiceOrb({ analyser, turn, emotion, agentName, isProcess
     let noiseAmp = 0;
     let glowIntensity = 0.15;
 
-    if (turn === "agent" && !isProcessing) {
+    const curTurn = turnRef.current;
+    const curProcessing = isProcessingRef.current;
+
+    if (curTurn === "agent" && !curProcessing) {
       // Speaking: orb reacts to audio
       breathSpeed = 1.2;
       breathAmp = 2;
       noiseAmp = amplitude * 35;
       glowIntensity = 0.2 + amplitude * 0.4;
-    } else if (isProcessing) {
+    } else if (curProcessing) {
       // Thinking: gentle shimmer
       breathSpeed = 0.4;
       breathAmp = 6;
       noiseAmp = 2;
       glowIntensity = 0.12;
-    } else if (turn === "user") {
+    } else if (curTurn === "user") {
       // Listening: contracted, subtle
       breathSpeed = 0.6;
       breathAmp = 3;
@@ -113,7 +120,7 @@ export default function VoiceOrb({ analyser, turn, emotion, agentName, isProcess
     }
 
     const breath = Math.sin(t * breathSpeed) * breathAmp;
-    const baseR = turn === "user" ? BASE_RADIUS - 10 : BASE_RADIUS;
+    const baseR = curTurn === "user" ? BASE_RADIUS - 10 : BASE_RADIUS;
     const radius = baseR + breath;
 
     // Outer glow
@@ -167,7 +174,7 @@ export default function VoiceOrb({ analyser, turn, emotion, agentName, isProcess
     ctx.fill();
 
     // Pulsing ring when speaking
-    if (turn === "agent" && amplitude > 0.05) {
+    if (curTurn === "agent" && amplitude > 0.05) {
       const ringRadius = radius + 10 + amplitude * 20;
       ctx.beginPath();
       ctx.arc(CENTER, CENTER, ringRadius, 0, TWO_PI);
@@ -177,7 +184,7 @@ export default function VoiceOrb({ analyser, turn, emotion, agentName, isProcess
     }
 
     rafRef.current = requestAnimationFrame(draw);
-  }, [analyser, turn, isProcessing]);
+  }, [analyser]);
 
   useEffect(() => {
     rafRef.current = requestAnimationFrame(draw);

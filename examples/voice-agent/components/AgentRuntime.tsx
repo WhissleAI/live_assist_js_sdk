@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useEffect, useState } from "react";
+import React, { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import type { SessionState } from "../App";
 import { navigate } from "../App";
 import type { AgentConfig } from "../lib/agent-config";
@@ -13,6 +13,7 @@ import { saveSession } from "../lib/session-store";
 import { SessionAudioRecorder } from "../lib/audio-recorder";
 import { saveAudio, uploadToGcs } from "../lib/audio-store";
 import { gatewayConfig } from "../lib/gateway-config";
+import Icon from "./Icon";
 import { useTtsAnalysis } from "../hooks/useTtsAnalysis";
 import WhissleLogo from "./WhissleLogo";
 
@@ -61,8 +62,13 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
   const [started, setStarted] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [ttsAnalyser, setTtsAnalyser] = useState<AnalyserNode | null>(null);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
   const sessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recorderRef = useRef<SessionAudioRecorder>(new SessionAudioRecorder());
 
@@ -142,10 +148,19 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
       const sliceRaw = globalTl.slice(agentTimelineIdxAtLastFlushRef.current);
       agentTimelineIdxAtLastFlushRef.current = globalTl.length;
 
-      const minGlobalMs = sliceRaw.length
-        ? Math.min(...sliceRaw.map((e) => e.offset))
-        : agentResponseStartSessionMsRef.current;
-      const audioOffsetSec = Math.max(0, minGlobalMs / 1000);
+      // Compute audioOffsetSec relative to mic audio start.
+      // Priority: TTS emotion timeline > agentResponseStart wall-clock > audioStartMs fallback.
+      const audioStart = prev.audioStartMs ?? prev.sessionStart;
+      let audioOffsetSec: number;
+      if (sliceRaw.length > 0) {
+        audioOffsetSec = Math.max(0, Math.min(...sliceRaw.map((e) => e.offset)) / 1000);
+      } else if (agentResponseStartSessionMsRef.current > 0) {
+        audioOffsetSec = agentResponseStartSessionMsRef.current / 1000;
+      } else if (audioStart != null) {
+        audioOffsetSec = Math.max(0, (Date.now() - audioStart) / 1000);
+      } else {
+        audioOffsetSec = 0;
+      }
 
       const emotionTimelineUtterance =
         sliceRaw.length > 0
@@ -220,8 +235,8 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
     onStep: handleStep,
     onAgentUtterance: handleAgentUtterance,
     onAgentTurnWallStart: () => {
-      const st = sessionRef.current.sessionStart;
-      agentResponseStartSessionMsRef.current = st ? Date.now() - st : 0;
+      const audioStart = sessionRef.current.audioStartMs ?? sessionRef.current.sessionStart;
+      agentResponseStartSessionMsRef.current = audioStart ? Date.now() - audioStart : 0;
     },
   });
 
@@ -234,7 +249,17 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
 
   const handleMicStream = useCallback((stream: MediaStream) => {
     recorderRef.current.startMic(stream);
-  }, []);
+    // Start TTS recording at the same time as mic recording so both audio
+    // tracks share the same t=0 during playback in SessionDetail.
+    const ttsClient = getTtsClient();
+    if (ttsClient) {
+      const audioCtx = ttsClient.getAudioContext();
+      if (audioCtx && !recorderRef.current.getTtsDestination()) {
+        const dest = recorderRef.current.createTtsDestination(audioCtx);
+        if (dest) ttsClient.setRecorderDestination(dest);
+      }
+    }
+  }, [getTtsClient]);
 
   const {
     start: startAsr,
@@ -258,7 +283,7 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
   localAgeProbs.current = flushedAgeProbs.current;
 
   const handleStart = useCallback(async () => {
-    if (!agentConfig) return;
+    if (!agentConfig || connecting || started) return;
     setConnecting(true);
     updateSession({
       ...sessionRef.current,
@@ -279,6 +304,7 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
     setStarted(true);
     setAgentSteps([]);
     setElapsed(0);
+    setConnectionError(null);
     agentTimelineIdxAtLastFlushRef.current = 0;
     ttsProbsOutRef.current = {};
 
@@ -288,28 +314,31 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
       const ttsClient = getTtsClient();
       if (ttsClient) {
         setTtsAnalyser(ttsClient.getAnalyser());
-
-        const audioCtx = ttsClient.getAudioContext();
-        if (audioCtx) {
-          const dest = recorderRef.current.createTtsDestination(audioCtx);
-          if (dest) ttsClient.setRecorderDestination(dest);
-        }
-
-        startTtsAnalysis(ttsClient, 22050).catch((e) =>
-          console.warn("[AgentRuntime] TTS analysis start failed:", e),
-        );
+        // TTS recording is set up in handleMicStream so both mic and TTS
+        // recordings start at the same time (aligned t=0 for playback).
+        startTtsAnalysis(ttsClient, 22050).catch(() => {});
+      } else {
+        setConnectionError("Voice connection failed. The agent cannot speak — check your connection and try again.");
       }
 
       await startAsr();
       greet();
     } catch (e) {
-      console.error("[AgentRuntime] Start failed:", e);
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      setConnectionError(`Failed to start session: ${msg}`);
     } finally {
       setConnecting(false);
     }
 
     if (agentConfig.maxSessionMinutes > 0) {
       const endMs = agentConfig.maxSessionMinutes * 60_000;
+      // Warn 30 seconds before timeout
+      if (endMs > 30_000) {
+        warningTimerRef.current = setTimeout(() => {
+          setTimeoutWarning(true);
+          setTimeout(() => setTimeoutWarning(false), 10_000);
+        }, endMs - 30_000);
+      }
       sessionTimerRef.current = setTimeout(() => {
         handleStop();
       }, endMs);
@@ -318,6 +347,7 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
 
   const handleStop = useCallback(async () => {
     if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
     if (tickRef.current) clearInterval(tickRef.current);
     stopTtsAnalysis();
     stopAsr();
@@ -348,9 +378,17 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
   useEffect(() => {
     return () => {
       if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
       if (tickRef.current) clearInterval(tickRef.current);
     };
   }, []);
+
+  // Auto-scroll transcript to bottom when new segments arrive
+  useEffect(() => {
+    if (showTranscript && session.transcript.length > 0) {
+      transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [showTranscript, session.transcript.length]);
 
   if (!agentConfig) {
     return (
@@ -417,6 +455,13 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
         <div className="runtime-timer">
           <span className="runtime-timer-dot" />
           {formatDuration(elapsed)}
+          {agentConfig && agentConfig.maxSessionMinutes > 0 && (
+            <span className="runtime-timer-remaining">
+              {" / "}
+              {formatDuration(Math.max(0, agentConfig.maxSessionMinutes * 60_000 - elapsed))}
+              {" left"}
+            </span>
+          )}
         </div>
       )}
 
@@ -448,12 +493,62 @@ export default function AgentRuntime({ agentId, asrUrl, session, updateSession, 
       />
 
       {showEmotionLabel && session.isActive && session.currentEmotion !== "NEUTRAL" && (
-        <div className="emotion-label-float">
+        <div className="emotion-label-float" aria-live="polite" aria-atomic="true">
           {EMOTION_LABELS[session.currentEmotion] || session.currentEmotion}
         </div>
       )}
 
+      {/* Live transcript panel */}
+      {session.isActive && showTranscript && session.transcript.length > 0 && (
+        <div className="runtime-transcript-panel">
+          <div className="runtime-transcript-header">
+            <span>Transcript</span>
+            <button type="button" className="runtime-transcript-close" onClick={() => setShowTranscript(false)} aria-label="Close transcript">
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          <div className="runtime-transcript-body">
+            {session.transcript.map((seg) => (
+              <div key={seg.id} className={`runtime-transcript-seg runtime-transcript-seg--${seg.speaker}`}>
+                <span className="runtime-transcript-speaker">{seg.speaker === "agent" ? agentConfig.name : "You"}</span>
+                <span className="runtime-transcript-text">{seg.text}</span>
+              </div>
+            ))}
+            <div ref={transcriptEndRef} />
+          </div>
+        </div>
+      )}
+
+      {/* Connection error banner */}
+      {connectionError && (
+        <div className="runtime-connection-error" role="alert">
+          <Icon name="alert-circle" size={16} />
+          <span>{connectionError}</span>
+          <button type="button" onClick={() => setConnectionError(null)} aria-label="Dismiss">
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Timeout warning */}
+      {timeoutWarning && (
+        <div className="runtime-timeout-warning" aria-live="assertive">
+          Session ending in 30 seconds
+        </div>
+      )}
+
       <div className="runtime-bottom-controls">
+        {session.isActive && (
+          <button
+            type="button"
+            className={`runtime-transcript-toggle ${showTranscript ? "runtime-transcript-toggle--active" : ""}`}
+            onClick={() => setShowTranscript((v) => !v)}
+            aria-label={showTranscript ? "Hide transcript" : "Show transcript"}
+            title="Toggle transcript"
+          >
+            <Icon name="message-square" size={18} />
+          </button>
+        )}
         <MicButton
           isActive={session.isActive}
           isConnected={session.isConnected}

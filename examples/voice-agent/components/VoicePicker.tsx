@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useCallback, useRef } from "react";
+import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { VOICE_CATALOG, type VoiceEntry } from "../lib/voice-catalog";
+import { fetchTtsPreview } from "../lib/tts-proxy";
 import Icon from "./Icon";
 
 const PREVIEW_TEXT = "Hello! I'm ready to help you today.";
@@ -14,6 +15,17 @@ export default function VoicePicker({ selectedId, onSelect }: Props) {
   const [search, setSearch] = useState("");
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Clean up preview audio on unmount to prevent leaks
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        URL.revokeObjectURL(previewAudioRef.current.src);
+        previewAudioRef.current = null;
+      }
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     let result = filter === "all" ? VOICE_CATALOG : VOICE_CATALOG.filter((v) => v.gender === filter);
@@ -50,38 +62,13 @@ export default function VoicePicker({ selectedId, onSelect }: Props) {
       previewAudioRef.current = null;
     }
 
-    const apiKey = import.meta.env.VITE_CARTESIA_API_KEY;
-    if (!apiKey) {
-      console.warn("[VoicePicker] No VITE_CARTESIA_API_KEY set, cannot preview voice");
-      return;
-    }
-
     setPreviewingId(voiceId);
 
     try {
-      const resp = await fetch("https://api.cartesia.ai/tts/bytes", {
-        method: "POST",
-        headers: {
-          "X-API-Key": apiKey,
-          "Cartesia-Version": "2025-04-16",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model_id: "sonic-3",
-          transcript: PREVIEW_TEXT,
-          voice: { mode: "id", id: voiceId },
-          output_format: { container: "mp3", bit_rate: 128000 },
-          language: "en",
-        }),
+      const blob = await fetchTtsPreview({
+        voiceId,
+        text: PREVIEW_TEXT,
       });
-
-      if (!resp.ok) {
-        console.warn("[VoicePicker] Preview fetch failed:", resp.status);
-        setPreviewingId(null);
-        return;
-      }
-
-      const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       previewAudioRef.current = audio;
@@ -131,11 +118,13 @@ export default function VoicePicker({ selectedId, onSelect }: Props) {
       )}
       <div className="voice-grid">
         {filtered.map((v) => (
-          <button
+          <div
             key={v.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             className={`voice-card ${selectedId === v.id ? "voice-card--selected" : ""}`}
             onClick={() => onSelect(v)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(v); } }}
           >
             <span className="voice-card-gender">
               {v.gender === "female" ? "♀" : v.gender === "male" ? "♂" : "◎"}
@@ -156,7 +145,7 @@ export default function VoicePicker({ selectedId, onSelect }: Props) {
               )}
             </button>
             {selectedId === v.id && <span className="voice-card-check">✓</span>}
-          </button>
+          </div>
         ))}
       </div>
     </div>

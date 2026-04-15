@@ -1,6 +1,6 @@
 /**
  * Stable device ID for identifying this browser across sessions.
- * Shared with browser.whissle.ai so memories persist across apps.
+ * Shared with lulu.whissle.ai so memories persist across apps.
  */
 
 const STORAGE_KEY = "whissle_device_id";

@@ -5,19 +5,20 @@ interface Props {
   answers: AnswerScore[];
 }
 
-const EMOTION_COLORS: Record<string, string> = {
-  HAPPY: "#16a34a",
-  SURPRISE: "#6366f1",
-  NEUTRAL: "#9198a8",
-  SAD: "#d97706",
-  FEAR: "#dc2626",
-  ANGER: "#dc2626",
-  ANGRY: "#dc2626",
-  DISGUST: "#d97706",
+// Map emotions to CSS custom properties so they adapt to dark mode
+const EMOTION_CSS_COLORS: Record<string, string> = {
+  HAPPY: "var(--color-success)",
+  SURPRISE: "var(--color-primary)",
+  NEUTRAL: "var(--color-text-dim)",
+  SAD: "var(--color-warning)",
+  FEAR: "var(--color-danger)",
+  ANGER: "var(--color-danger)",
+  ANGRY: "var(--color-danger)",
+  DISGUST: "var(--color-warning)",
 };
 
 function getEmotionColor(emotion: string): string {
-  return EMOTION_COLORS[emotion.toUpperCase()] ?? "#9198a8";
+  return EMOTION_CSS_COLORS[emotion.toUpperCase()] ?? "var(--color-text-dim)";
 }
 
 function buildStrip(timeline: Array<{ offset: number; emotion: string; confidence: number }>): Array<{ emotion: string; color: string; widthPct: number }> {
@@ -46,11 +47,30 @@ function buildStrip(timeline: Array<{ offset: number; emotion: string; confidenc
   return segments;
 }
 
+const LEGEND_ITEMS: Array<{ key: string; label: string }> = [
+  { key: "HAPPY", label: "Confident" },
+  { key: "SURPRISE", label: "Engaged" },
+  { key: "NEUTRAL", label: "Steady" },
+  { key: "SAD", label: "Uncertain" },
+  { key: "FEAR", label: "Nervous" },
+  { key: "ANGER", label: "Frustrated" },
+];
+
 export default function EmotionHeatmap({ answers }: Props) {
   if (answers.length === 0) return null;
 
+  const summaryText = answers.map((a, i) => {
+    const dominant = a.emotionTimeline.reduce((acc, e) => {
+      acc[e.emotion] = (acc[e.emotion] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    const top = Object.entries(dominant).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "NEUTRAL";
+    return `Q${i + 1}: mostly ${top.toLowerCase()}`;
+  }).join(", ");
+
   return (
-    <div className="emotion-heatmap">
+    <div className="emotion-heatmap" role="img" aria-label={`Emotion journey across ${answers.length} answers. ${summaryText}`}>
+      <h4 className="emotion-heatmap-title">Emotion Journey</h4>
       {answers.map((answer, i) => {
         const strip = buildStrip(answer.emotionTimeline);
         return (
@@ -70,10 +90,10 @@ export default function EmotionHeatmap({ answers }: Props) {
         );
       })}
       <div className="emotion-heatmap-legend">
-        {["HAPPY", "NEUTRAL", "SAD", "FEAR"].map((e) => (
-          <span key={e} className="emotion-heatmap-legend-item">
-            <span className="emotion-heatmap-legend-dot" style={{ background: getEmotionColor(e) }} />
-            {e === "HAPPY" ? "Confident" : e === "NEUTRAL" ? "Neutral" : e === "SAD" ? "Uncertain" : "Nervous"}
+        {LEGEND_ITEMS.map((item) => (
+          <span key={item.key} className="emotion-heatmap-legend-item">
+            <span className="emotion-heatmap-legend-dot" style={{ background: getEmotionColor(item.key) }} aria-hidden="true" />
+            {item.label}
           </span>
         ))}
       </div>

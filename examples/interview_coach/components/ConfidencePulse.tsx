@@ -6,9 +6,9 @@ interface Props {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 70) return "var(--color-green)";
-  if (score >= 45) return "var(--color-amber)";
-  return "var(--color-red)";
+  if (score >= 70) return "var(--color-success)";
+  if (score >= 45) return "var(--color-warning)";
+  return "var(--color-danger)";
 }
 
 export default function ConfidencePulse({ score, emotion }: Props) {
@@ -16,7 +16,7 @@ export default function ConfidencePulse({ score, emotion }: Props) {
   const size = 40 + (score / 100) * 20;
 
   return (
-    <div className="confidence-pulse" title={`Confidence: ${score}% | Emotion: ${emotion}`}>
+    <div className="confidence-pulse" role="status" aria-label={`Confidence: ${score}%, Emotion: ${emotion}`} title={`Confidence: ${score}% | Emotion: ${emotion}`}>
       <div
         className="confidence-pulse-ring"
         style={{

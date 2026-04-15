@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   createDefaultAgent,
   AGENT_TEMPLATES,
@@ -15,6 +15,7 @@ import { navigate } from "../App";
 import { gatewayConfig } from "../lib/gateway-config";
 import Icon from "./Icon";
 import { showToast } from "./Toast";
+import { confirmAction } from "./ConfirmModal";
 
 interface ToolDef {
   id: string;
@@ -81,6 +82,7 @@ export default function AgentBuilder({ agentId }: Props) {
   });
   const [section, setSection] = useState<Section>("identity");
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [showTemplates, setShowTemplates] = useState(!agentId);
   const [sheetTestResult, setSheetTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [sheetTesting, setSheetTesting] = useState(false);
@@ -90,6 +92,34 @@ export default function AgentBuilder({ agentId }: Props) {
   const [dynamicTools, setDynamicTools] = useState<ToolDef[]>([]);
   const [toolsLoaded, setToolsLoaded] = useState(false);
   const [toolFilter, setToolFilter] = useState("");
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [autoSaving, setAutoSaving] = useState(false);
+
+  // Auto-save with 2s debounce
+  useEffect(() => {
+    if (!agentId) return; // Only auto-save existing agents, not new ones
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    setAutoSaving(true);
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveAgent(config);
+      setSaved(true);
+      setDirty(false);
+      setAutoSaving(false);
+      setTimeout(() => setSaved(false), 1500);
+    }, 2000);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [config, agentId]);
+
+  // Validate config
+  useEffect(() => {
+    const errors: string[] = [];
+    if (!config.name.trim()) errors.push("Agent name is required");
+    if (!config.systemPrompt.trim() && config.status === "published") errors.push("System prompt is recommended before publishing");
+    setValidationErrors(errors);
+  }, [config.name, config.systemPrompt, config.status]);
 
   // Fetch tools from backend, falling back to static list
   useEffect(() => {
@@ -132,25 +162,40 @@ export default function AgentBuilder({ agentId }: Props) {
     general: "Other",
   };
 
-  // Warn before leaving with unsaved changes
+  // Warn before leaving with unsaved changes (browser close + in-app navigation)
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!saved) {
+      if (dirty) {
         e.preventDefault();
       }
     };
+    const handleHashChange = () => {
+      if (dirty) {
+        const leave = window.confirm("You have unsaved changes. Leave anyway?");
+        if (!leave) {
+          // Restore the previous hash
+          window.history.pushState(null, "", `#/agents/${config.id}/edit`);
+        }
+      }
+    };
     window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [saved]);
+    window.addEventListener("hashchange", handleHashChange);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("hashchange", handleHashChange);
+    };
+  }, [dirty, config.id]);
 
   const patch = useCallback((updates: Partial<AgentConfig>) => {
     setConfig((prev) => ({ ...prev, ...updates }));
     setSaved(false);
+    setDirty(true);
   }, []);
 
   const patchTheme = useCallback((updates: Partial<AgentTheme>) => {
     setConfig((prev) => ({ ...prev, theme: { ...prev.theme, ...updates } }));
     setSaved(false);
+    setDirty(true);
   }, []);
 
   const patchIntegrations = useCallback((updates: Partial<AgentIntegrations>) => {
@@ -159,6 +204,7 @@ export default function AgentBuilder({ agentId }: Props) {
       integrations: { ...prev.integrations, ...updates },
     }));
     setSaved(false);
+    setDirty(true);
     setSheetTestResult(null);
   }, []);
 
@@ -188,15 +234,24 @@ export default function AgentBuilder({ agentId }: Props) {
   const handleSave = useCallback(() => {
     saveAgent(config);
     setSaved(true);
+    setDirty(false);
     showToast("Agent saved", "success");
     setTimeout(() => setSaved(false), 2000);
   }, [config]);
 
-  const handlePublish = useCallback(() => {
+  const handlePublish = useCallback(async () => {
+    if (config.status === "published") {
+      const ok = await confirmAction(
+        "Update Published Agent",
+        "This agent is already published. Changes will be live immediately. Continue?",
+      );
+      if (!ok) return;
+    }
     const updated = { ...config, status: "published" as const };
     saveAgent(updated);
     setConfig(updated);
     setSaved(true);
+    setDirty(false);
   }, [config]);
 
   const applyTemplate = useCallback((templateId: string) => {
@@ -223,6 +278,13 @@ export default function AgentBuilder({ agentId }: Props) {
       setAnalyticsLoading(false);
     }
   }, [config.id]);
+
+  // Auto-load analytics when navigating to the analytics section
+  useEffect(() => {
+    if (section === "analytics" && !analytics && !analyticsLoading && agentId) {
+      fetchAnalytics(analyticsPeriod);
+    }
+  }, [section, analytics, analyticsLoading, agentId, analyticsPeriod, fetchAnalytics]);
 
   const toggleTool = useCallback((toolId: string) => {
     setConfig((prev) => {
@@ -278,21 +340,48 @@ export default function AgentBuilder({ agentId }: Props) {
           {agentId ? config.name : "Create Agent"}
         </h1>
         <div className="builder-actions">
-          <button type="button" className={`btn btn--secondary ${saved ? "btn--saved" : ""}`} onClick={handleSave}>
-            {saved ? <><Icon name="check" size={14} /> Saved</> : "Save Draft"}
+          {agentId && (
+            <button type="button" className="btn btn--ghost" onClick={() => window.open(`#/a/${config.id}`, "_blank")} title="Test this agent">
+              <Icon name="external-link" size={14} /> Test
+            </button>
+          )}
+          <button type="button" className={`btn btn--secondary ${saved ? "btn--saved" : ""}`} onClick={handleSave} disabled={validationErrors.includes("Agent name is required")}>
+            {saved ? <><Icon name="check" size={14} /> Saved</> : autoSaving && agentId ? <><Icon name="loader" size={14} /> Saving...</> : agentId ? "Save" : "Save Draft"}
           </button>
-          <button type="button" className="btn btn--primary" onClick={handlePublish}>
+          <button type="button" className="btn btn--primary" onClick={handlePublish} disabled={validationErrors.includes("Agent name is required")}>
             Publish
           </button>
         </div>
       </div>
 
+      {validationErrors.length > 0 && (
+        <div className="builder-validation">
+          {validationErrors.map((err, i) => (
+            <span key={i} className="builder-validation-item">
+              <Icon name="alert-triangle" size={13} /> {err}
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="builder-layout">
-        <nav className="builder-nav">
+        <nav className="builder-nav" role="tablist" aria-label="Builder sections" onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const idx = SECTIONS.findIndex((s) => s.id === section);
+            const next = e.key === "ArrowDown"
+              ? (idx + 1) % SECTIONS.length
+              : (idx - 1 + SECTIONS.length) % SECTIONS.length;
+            setSection(SECTIONS[next].id);
+            (e.currentTarget.children[next] as HTMLElement)?.focus();
+          }
+        }}>
           {SECTIONS.map((s) => (
             <button
               key={s.id}
               type="button"
+              role="tab"
+              aria-selected={section === s.id}
               className={`builder-nav-item ${section === s.id ? "builder-nav-item--active" : ""}`}
               onClick={() => setSection(s.id)}
             >
@@ -456,10 +545,10 @@ export default function AgentBuilder({ agentId }: Props) {
                 </label>
                 <div className="field">
                   <span className="field-label">Upload File</span>
-                  <p className="field-hint" style={{ marginBottom: "var(--space-2)" }}>Upload a text, markdown, or PDF file to append to the knowledge context.</p>
+                  <p className="field-hint" style={{ marginBottom: "var(--space-2)" }}>Upload a text, markdown, or CSV file to append to the knowledge context.</p>
                   <input
                     type="file"
-                    accept=".txt,.md,.csv,.pdf"
+                    accept=".txt,.md,.csv"
                     className="field-input"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -749,8 +838,8 @@ export default function AgentBuilder({ agentId }: Props) {
                     style={{
                       background:
                         config.theme.bgStyle === "solid"
-                          ? "#f1f5f9"
-                          : `linear-gradient(135deg, ${config.theme.primaryColor}18 0%, #f8fafc 50%, ${config.theme.accentColor}18 100%)`,
+                          ? "var(--color-surface, #f1f5f9)"
+                          : `linear-gradient(135deg, ${config.theme.primaryColor}18 0%, var(--color-bg, #f8fafc) 50%, ${config.theme.accentColor}18 100%)`,
                     }}
                   >
                     <div className="preview-agent-bar">
@@ -788,7 +877,7 @@ export default function AgentBuilder({ agentId }: Props) {
                       <h3 className="field-label">Shareable Link</h3>
                       <div className="deploy-url">
                         <code>{runtimeUrl}</code>
-                        <button type="button" className="btn btn--small" onClick={() => navigator.clipboard.writeText(runtimeUrl)}>
+                        <button type="button" className="btn btn--small" onClick={() => { navigator.clipboard.writeText(runtimeUrl); showToast("Link copied", "success"); }}>
                           Copy
                         </button>
                       </div>
@@ -796,7 +885,7 @@ export default function AgentBuilder({ agentId }: Props) {
                     <div className="deploy-block">
                       <h3 className="field-label">Embed Code</h3>
                       <pre className="deploy-code">{embedCode}</pre>
-                      <button type="button" className="btn btn--small" onClick={() => navigator.clipboard.writeText(embedCode)}>
+                      <button type="button" className="btn btn--small" onClick={() => { navigator.clipboard.writeText(embedCode); showToast("Embed code copied", "success"); }}>
                         Copy Embed Code
                       </button>
                     </div>
@@ -931,9 +1020,12 @@ export default function AgentBuilder({ agentId }: Props) {
                     )}
 
                     {analytics.total_sessions === 0 && (
-                      <p className="analytics-empty">
-                        No sessions recorded yet. Share your agent and start collecting data.
-                      </p>
+                      <div className="analytics-empty">
+                        <p>No sessions recorded yet.</p>
+                        <p style={{ marginTop: 8, fontSize: "0.85rem", color: "var(--color-text-dim)" }}>
+                          Test your agent using the <strong>Test</strong> button above, or share the embed URL to start collecting data.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}

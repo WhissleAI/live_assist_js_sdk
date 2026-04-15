@@ -20,6 +20,9 @@ import { EmotionTimelineBar, createScrollSyncGroup } from "./live-assist/Emotion
 import Icon from "./Icon";
 import { confirmAction } from "./ConfirmModal";
 import { showToast } from "./Toast";
+import { markdownToHtml } from "../lib/markdownToHtml";
+import { exportSessionCsv, exportSessionJson } from "../lib/session-export";
+import type { SegmentAnnotation } from "../lib/session-store";
 
 const WAVEFORM_WINDOW_SEC = 0.05;
 
@@ -181,6 +184,19 @@ export default function SessionDetail({ sessionId }: Props) {
   const [reTranscribing, setReTranscribing] = useState(false);
   const [reTranscribed, setReTranscribed] = useState(false);
 
+  // Annotations
+  const [annotations, setAnnotations] = useState<Record<string, SegmentAnnotation>>({});
+  const [editingSegId, setEditingSegId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [notingSegId, setNotingSegId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [tagInput, setTagInput] = useState("");
+  const [filterBookmarked, setFilterBookmarked] = useState(false);
+  const [filterEmotion, setFilterEmotion] = useState<string>("all");
+  const [transcriptSearch, setTranscriptSearch] = useState("");
+  const [renamingSession, setRenamingSession] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+
   const [scrollSyncGroup] = useState(() => createScrollSyncGroup());
 
   const micAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -194,10 +210,90 @@ export default function SessionDetail({ sessionId }: Props) {
     const sessions = loadSessions();
     const found = sessions.find((s) => s.id === sessionId);
     setSession(found || null);
+    if (found?.annotations) setAnnotations(found.annotations);
   }, [sessionId]);
+
+  const updateAnnotation = useCallback(
+    (segId: string, patch: Partial<SegmentAnnotation>) => {
+      setAnnotations((prev) => {
+        const existing = prev[segId] || {};
+        const updated = { ...prev, [segId]: { ...existing, ...patch } };
+        updateSession(sessionId, { annotations: updated });
+        return updated;
+      });
+    },
+    [sessionId],
+  );
+
+  const toggleBookmark = useCallback(
+    (segId: string) => {
+      const current = annotations[segId]?.bookmarked ?? false;
+      updateAnnotation(segId, { bookmarked: !current });
+    },
+    [annotations, updateAnnotation],
+  );
+
+  const startEditing = useCallback(
+    (segId: string, currentText: string) => {
+      setEditingSegId(segId);
+      setEditText(annotations[segId]?.editedText ?? currentText);
+    },
+    [annotations],
+  );
+
+  const saveEdit = useCallback(() => {
+    if (!editingSegId) return;
+    updateAnnotation(editingSegId, { editedText: editText.trim() || undefined });
+    setEditingSegId(null);
+    setEditText("");
+  }, [editingSegId, editText, updateAnnotation]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingSegId(null);
+    setEditText("");
+  }, []);
+
+  const startNoting = useCallback(
+    (segId: string) => {
+      setNotingSegId(segId);
+      setNoteText(annotations[segId]?.note ?? "");
+      setTagInput("");
+    },
+    [annotations],
+  );
+
+  const saveNote = useCallback(() => {
+    if (!notingSegId) return;
+    updateAnnotation(notingSegId, { note: noteText.trim() || undefined });
+    setNotingSegId(null);
+    setNoteText("");
+  }, [notingSegId, noteText, updateAnnotation]);
+
+  const addTag = useCallback(
+    (segId: string, tag: string) => {
+      const trimmed = tag.trim().toLowerCase();
+      if (!trimmed) return;
+      const existing = annotations[segId]?.tags ?? [];
+      if (existing.includes(trimmed)) return;
+      updateAnnotation(segId, { tags: [...existing, trimmed] });
+      setTagInput("");
+    },
+    [annotations, updateAnnotation],
+  );
+
+  const removeTag = useCallback(
+    (segId: string, tag: string) => {
+      const existing = annotations[segId]?.tags ?? [];
+      updateAnnotation(segId, { tags: existing.filter((t) => t !== tag) });
+    },
+    [annotations, updateAnnotation],
+  );
 
   const anchorMs = useMemo(() => {
     if (!session) return 0;
+    // Prefer audioStartMs (mic audio start) for alignment with audioOffsetSec values.
+    // Falls back to sessionStartMs for older sessions without audioStartMs.
+    if (session.audioStartMs != null) return session.audioStartMs;
     if (session.sessionStartMs != null) return session.sessionStartMs;
     if (session.transcript.length > 0) return session.transcript[0]!.timestamp;
     return new Date(session.date).getTime();
@@ -351,36 +447,30 @@ export default function SessionDetail({ sessionId }: Props) {
 
   const waveformDecodeUrl = micUrl ?? ttsUrl;
 
+  // Shared audio decode helper — creates one AudioContext per decode then closes it
+  const decodeAudioRms = useCallback(async (url: string): Promise<Float32Array> => {
+    const buf = await fetch(url).then((r) => r.arrayBuffer());
+    const ctx = new AudioContext();
+    try {
+      const decoded = await ctx.decodeAudioData(buf);
+      const channelData = decoded.getChannelData(0);
+      return computeRmsWindows(channelData, decoded.sampleRate, WAVEFORM_WINDOW_SEC);
+    } finally {
+      ctx.close().catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     if (!micUrl) {
       setMicAmplitudes(null);
       return;
     }
     let cancelled = false;
-    let audioCtx: AudioContext | null = null;
-    fetch(micUrl)
-      .then((r) => r.arrayBuffer())
-      .then((buf) => {
-        if (cancelled) return;
-        audioCtx = new AudioContext();
-        return audioCtx.decodeAudioData(buf);
-      })
-      .then((decoded) => {
-        if (cancelled || !decoded) return;
-        const channelData = decoded.getChannelData(0);
-        const rmsData = computeRmsWindows(channelData, decoded.sampleRate, WAVEFORM_WINDOW_SEC);
-        setMicAmplitudes(Array.from(rmsData));
-      })
-      .catch(() => {
-        if (!cancelled) setMicAmplitudes(null);
-      })
-      .finally(() => {
-        audioCtx?.close().catch(() => {});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [micUrl]);
+    decodeAudioRms(micUrl)
+      .then((rms) => { if (!cancelled) setMicAmplitudes(Array.from(rms)); })
+      .catch(() => { if (!cancelled) setMicAmplitudes(null); });
+    return () => { cancelled = true; };
+  }, [micUrl, decodeAudioRms]);
 
   useEffect(() => {
     if (!ttsUrl) {
@@ -388,30 +478,11 @@ export default function SessionDetail({ sessionId }: Props) {
       return;
     }
     let cancelled = false;
-    let audioCtx: AudioContext | null = null;
-    fetch(ttsUrl)
-      .then((r) => r.arrayBuffer())
-      .then((buf) => {
-        if (cancelled) return;
-        audioCtx = new AudioContext();
-        return audioCtx.decodeAudioData(buf);
-      })
-      .then((decoded) => {
-        if (cancelled || !decoded) return;
-        const channelData = decoded.getChannelData(0);
-        const rmsData = computeRmsWindows(channelData, decoded.sampleRate, WAVEFORM_WINDOW_SEC);
-        setTtsAmplitudes(Array.from(rmsData));
-      })
-      .catch(() => {
-        if (!cancelled) setTtsAmplitudes(null);
-      })
-      .finally(() => {
-        audioCtx?.close().catch(() => {});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [ttsUrl]);
+    decodeAudioRms(ttsUrl)
+      .then((rms) => { if (!cancelled) setTtsAmplitudes(Array.from(rms)); })
+      .catch(() => { if (!cancelled) setTtsAmplitudes(null); });
+    return () => { cancelled = true; };
+  }, [ttsUrl, decodeAudioRms]);
 
   useEffect(() => {
     if (!waveformDecodeUrl) {
@@ -419,28 +490,18 @@ export default function SessionDetail({ sessionId }: Props) {
       return;
     }
     let cancelled = false;
-    let audioCtx: AudioContext | null = null;
-    fetch(waveformDecodeUrl)
-      .then((r) => r.arrayBuffer())
-      .then((buf) => {
-        if (cancelled) return;
-        audioCtx = new AudioContext();
-        return audioCtx.decodeAudioData(buf);
-      })
-      .then((decoded) => {
-        if (cancelled || !decoded) return;
-        const channelData = decoded.getChannelData(0);
-        waveformDataRef.current = computeRmsWindows(channelData, decoded.sampleRate, WAVEFORM_WINDOW_SEC);
-        if (!cancelled) setWaveformReady((v) => v + 1);
+    decodeAudioRms(waveformDecodeUrl)
+      .then((rms) => {
+        if (!cancelled) {
+          waveformDataRef.current = rms;
+          setWaveformReady((v) => v + 1);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           waveformDataRef.current = null;
           setWaveformReady((v) => v + 1);
         }
-      })
-      .finally(() => {
-        audioCtx?.close().catch(() => {});
       });
     return () => {
       cancelled = true;
@@ -601,22 +662,24 @@ export default function SessionDetail({ sessionId }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay, seekToTime, barDurationSec, currentTime]);
 
-  // ── AI Summary: generate or load cached ──────────────────────────────
+  // ── AI Summary: load cached on mount, generate on demand ─────────────
   useEffect(() => {
-    if (!session) return;
-    // Use cached summary if available
-    if (session.aiSummary) {
-      setAiSummary(session.aiSummary);
-      return;
-    }
-    if (session.transcript.length === 0) return;
+    if (session?.aiSummary) setAiSummary(session.aiSummary);
+  }, [session?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    let cancelled = false;
+  const aiSummaryAbortRef = useRef<AbortController | null>(null);
+
+  const generateAiSummary = useCallback(() => {
+    if (!session || session.transcript.length === 0) return;
+
+    aiSummaryAbortRef.current?.abort();
     const controller = new AbortController();
+    aiSummaryAbortRef.current = controller;
+
     setAiSummaryLoading(true);
     setAiSummaryError(null);
+    setAiSummary("");
 
-    // Build transcript text with emotion context
     const transcriptText = session.transcript
       .map((seg) => {
         const speaker = seg.speaker === "agent" ? "Agent" : "User";
@@ -674,140 +737,125 @@ export default function SessionDetail({ sessionId }: Props) {
       },
       {
         onChunk: (text) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           accumulated += text;
           setAiSummary(accumulated);
         },
         onDone: () => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setAiSummaryLoading(false);
-          // Cache the summary in localStorage
           if (accumulated.trim()) {
             updateSession(session.id, { aiSummary: accumulated });
           }
         },
         onError: (msg) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setAiSummaryLoading(false);
           setAiSummaryError(msg);
         },
       },
       controller.signal,
     ).catch((err) => {
-      if (!cancelled) {
+      if (!controller.signal.aborted) {
         setAiSummaryLoading(false);
         setAiSummaryError(err?.message || "Failed to generate summary");
       }
     });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
   }, [session]);
 
-  // ── Re-transcription: batch ASR for cleaner text ────────────────────
   useEffect(() => {
-    if (!session || !micUrl) return;
-    if (session.reTranscribedAt) {
-      setReTranscribed(true);
-      return;
-    }
-    // Only re-transcribe user segments
+    return () => { aiSummaryAbortRef.current?.abort(); };
+  }, []);
+
+  // ── Re-transcription: batch ASR for cleaner text (opt-in) ───────────
+  useEffect(() => {
+    if (session?.reTranscribedAt) setReTranscribed(true);
+  }, [session?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const reTranscribeRef = useRef(false);
+
+  const handleReTranscribe = useCallback(async () => {
+    if (!session || !micUrl || reTranscribeRef.current) return;
     const userSegs = session.transcript.filter((s) => s.speaker === "user" || s.speaker === "other");
     if (userSegs.length === 0) return;
 
-    let cancelled = false;
+    reTranscribeRef.current = true;
     setReTranscribing(true);
 
-    (async () => {
-      try {
-        const resp = await fetch(micUrl);
-        const blob = await resp.blob();
+    try {
+      const resp = await fetch(micUrl);
+      const blob = await resp.blob();
 
-        const formData = new FormData();
-        formData.append("file", blob, "session-mic.wav");
-        formData.append("metadata_prob", "true");
-        formData.append("word_timestamps", "true");
+      const formData = new FormData();
+      formData.append("file", blob, "session-mic.wav");
+      formData.append("metadata_prob", "true");
+      formData.append("word_timestamps", "true");
 
-        const sessionToken = gatewayConfig.getSessionToken();
-        const headers: Record<string, string> = {
-          "X-Device-Id": getDeviceId(),
-        };
-        if (sessionToken) headers["X-Session-Token"] = sessionToken;
+      const sessionToken = gatewayConfig.getSessionToken();
+      const headers: Record<string, string> = {
+        "X-Device-Id": getDeviceId(),
+      };
+      if (sessionToken) headers["X-Session-Token"] = sessionToken;
 
-        const asrResp = await fetch(`${gatewayConfig.httpBase}/asr/transcribe`, {
-          method: "POST",
-          headers,
-          body: formData,
-        });
+      const asrResp = await fetch(`${gatewayConfig.httpBase}/asr/transcribe`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
 
-        if (cancelled) return;
-
-        if (!asrResp.ok) {
-          console.warn("[ReTranscribe] ASR returned", asrResp.status);
-          setReTranscribing(false);
-          return;
-        }
-
-        const asrResult = await asrResp.json();
-        if (cancelled) return;
-
-        const newTranscript = asrResult.transcript as string | undefined;
-        if (!newTranscript?.trim()) {
-          setReTranscribing(false);
-          return;
-        }
-
-        // If word timestamps are available, use them to align with segments
-        const wordTs = asrResult.word_timestamps as Array<{ word: string; start: number; end: number }> | undefined;
-
-        const updatedTranscript = [...session.transcript];
-        if (wordTs?.length) {
-          // Map words back to original segments by time range
-          for (let i = 0; i < updatedTranscript.length; i++) {
-            const seg = updatedTranscript[i]!;
-            if (seg.speaker !== "user" && seg.speaker !== "other") continue;
-            const segStart = segmentAudioOffsetSec(seg, anchorMs);
-            const nextUserSeg = updatedTranscript.slice(i + 1).find((s) => s.speaker === "user" || s.speaker === "other");
-            const segEnd = nextUserSeg ? segmentAudioOffsetSec(nextUserSeg, anchorMs) : Infinity;
-
-            const wordsInRange = wordTs.filter((w) => w.start >= segStart - 0.1 && w.start < segEnd);
-            if (wordsInRange.length > 0) {
-              updatedTranscript[i] = { ...seg, text: wordsInRange.map((w) => w.word).join(" ") };
-            }
-          }
-        } else {
-          // Fallback: if only one user segment, replace its text entirely
-          const firstUserIdx = updatedTranscript.findIndex((s) => s.speaker === "user" || s.speaker === "other");
-          if (firstUserIdx >= 0 && userSegs.length === 1) {
-            updatedTranscript[firstUserIdx] = { ...updatedTranscript[firstUserIdx]!, text: newTranscript };
-          }
-        }
-
-        // Update session in localStorage
-        updateSession(session.id, {
-          transcript: updatedTranscript,
-          reTranscribedAt: Date.now(),
-        });
-
-        // Update local state
-        setSession((prev) => prev ? { ...prev, transcript: updatedTranscript, reTranscribedAt: Date.now() } : prev);
-        setReTranscribed(true);
+      if (!asrResp.ok) {
+        console.warn("[ReTranscribe] ASR returned", asrResp.status);
         setReTranscribing(false);
-      } catch (err) {
-        if (!cancelled) {
-          console.warn("[ReTranscribe] error:", err);
-          setReTranscribing(false);
+        reTranscribeRef.current = false;
+        return;
+      }
+
+      const asrResult = await asrResp.json();
+
+      const newTranscript = asrResult.transcript as string | undefined;
+      if (!newTranscript?.trim()) {
+        setReTranscribing(false);
+        reTranscribeRef.current = false;
+        return;
+      }
+
+      const wordTs = asrResult.word_timestamps as Array<{ word: string; start: number; end: number }> | undefined;
+
+      const updatedTranscript = [...session.transcript];
+      if (wordTs?.length) {
+        for (let i = 0; i < updatedTranscript.length; i++) {
+          const seg = updatedTranscript[i]!;
+          if (seg.speaker !== "user" && seg.speaker !== "other") continue;
+          const segStart = segmentAudioOffsetSec(seg, anchorMs);
+          const nextUserSeg = updatedTranscript.slice(i + 1).find((s) => s.speaker === "user" || s.speaker === "other");
+          const segEnd = nextUserSeg ? segmentAudioOffsetSec(nextUserSeg, anchorMs) : Infinity;
+
+          const wordsInRange = wordTs.filter((w) => w.start >= segStart - 0.1 && w.start < segEnd);
+          if (wordsInRange.length > 0) {
+            updatedTranscript[i] = { ...seg, text: wordsInRange.map((w) => w.word).join(" ") };
+          }
+        }
+      } else {
+        const firstUserIdx = updatedTranscript.findIndex((s) => s.speaker === "user" || s.speaker === "other");
+        if (firstUserIdx >= 0 && userSegs.length === 1) {
+          updatedTranscript[firstUserIdx] = { ...updatedTranscript[firstUserIdx]!, text: newTranscript };
         }
       }
-    })();
 
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.id, micUrl]);
+      updateSession(session.id, {
+        transcript: updatedTranscript,
+        reTranscribedAt: Date.now(),
+      });
+
+      setSession((prev) => prev ? { ...prev, transcript: updatedTranscript, reTranscribedAt: Date.now() } : prev);
+      setReTranscribed(true);
+      setReTranscribing(false);
+    } catch (err) {
+      console.warn("[ReTranscribe] error:", err);
+      setReTranscribing(false);
+      reTranscribeRef.current = false;
+    }
+  }, [session, micUrl, anchorMs]);
 
   if (!session) {
     return (
@@ -839,9 +887,39 @@ export default function SessionDetail({ sessionId }: Props) {
         <button type="button" className="btn btn--ghost session-detail-back" onClick={() => navigate("sessions")}>
           <Icon name="chevron-left" size={16} /> Back
         </button>
-        <h1 className="session-detail-title">
-          {session.agentName || "Session"} · {new Date(session.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-        </h1>
+        {renamingSession ? (
+          <input
+            className="session-detail-rename-input"
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={() => {
+              const name = renameValue.trim();
+              if (name && session) {
+                updateSession(session.id, { customName: name });
+                setSession({ ...session, customName: name });
+              }
+              setRenamingSession(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setRenamingSession(false);
+            }}
+          />
+        ) : (
+          <h1
+            className="session-detail-title"
+            onClick={() => {
+              setRenameValue(session.customName || session.agentName || "");
+              setRenamingSession(true);
+            }}
+            title="Click to rename"
+            style={{ cursor: "pointer" }}
+          >
+            {session.customName || session.agentName || "Session"} · {new Date(session.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+            <Icon name="edit-2" size={13} />
+          </h1>
+        )}
         <button
           type="button"
           className="btn btn--ghost btn--small session-detail-delete"
@@ -899,21 +977,32 @@ export default function SessionDetail({ sessionId }: Props) {
       <div className="session-detail-layout">
         <div className="session-detail-audio-col">
           {/* AI Analysis */}
-          {(aiSummary || aiSummaryLoading || aiSummaryError) && (
-            <div className="ai-summary-card">
-              <div className="ai-summary-header">
-                <Icon name="sparkles" size={15} />
-                <span>AI Analysis</span>
-                {aiSummaryLoading && <span className="ai-summary-loading">Analyzing...</span>}
-              </div>
-              {aiSummaryError && (
-                <div className="ai-summary-error">{aiSummaryError}</div>
+          <div className="ai-summary-card">
+            <div className="ai-summary-header">
+              <Icon name="sparkles" size={15} />
+              <span>AI Analysis</span>
+              {aiSummaryLoading && <span className="ai-summary-loading">Analyzing...</span>}
+              {!aiSummary && !aiSummaryLoading && session.transcript.length > 0 && (
+                <button type="button" className="btn btn--small btn--secondary" onClick={generateAiSummary}>
+                  <Icon name="zap" size={13} /> Generate
+                </button>
               )}
-              {aiSummary && (
-                <div className="ai-summary-body">{aiSummary}</div>
+              {aiSummary && !aiSummaryLoading && (
+                <button type="button" className="btn btn--small btn--ghost" onClick={generateAiSummary} title="Regenerate analysis">
+                  <Icon name="refresh-cw" size={13} />
+                </button>
               )}
             </div>
-          )}
+            {aiSummaryError && (
+              <div className="ai-summary-error">{aiSummaryError}</div>
+            )}
+            {aiSummary && (
+              <div className="ai-summary-body" dangerouslySetInnerHTML={{ __html: markdownToHtml(aiSummary) }} />
+            )}
+            {!aiSummary && !aiSummaryLoading && !aiSummaryError && (
+              <div className="ai-summary-placeholder">Click Generate to analyze this conversation with AI.</div>
+            )}
+          </div>
 
           {loading && <div className="session-detail-message">Loading audio...</div>}
 
@@ -1077,18 +1166,88 @@ export default function SessionDetail({ sessionId }: Props) {
 
         <div className="session-detail-transcript-col">
           <div className="session-detail-transcript-header">
-            Transcript · {segments.length} segments
-            {reTranscribing && <span className="transcript-enhancing"><span className="processing-dot" /> Enhancing...</span>}
-            {reTranscribed && !reTranscribing && <span className="transcript-enhanced"><Icon name="check" size={12} /> Enhanced</span>}
+            <span>Transcript · {segments.length} segments</span>
+            <div className="transcript-header-actions">
+              {reTranscribing && <span className="transcript-enhancing"><span className="processing-dot" /> Enhancing...</span>}
+              {!reTranscribed && !reTranscribing && micUrl && (
+                <button type="button" className="btn btn--ghost btn--small" onClick={handleReTranscribe} title="Re-transcribe with batch ASR for cleaner text">
+                  <Icon name="zap" size={13} /> Enhance
+                </button>
+              )}
+              {reTranscribed && !reTranscribing && <span className="transcript-enhanced"><Icon name="check" size={12} /> Enhanced</span>}
+              <button
+                type="button"
+                className={`btn btn--ghost btn--small ${filterBookmarked ? "btn--ghost--active" : ""}`}
+                onClick={() => setFilterBookmarked((f) => !f)}
+                title={filterBookmarked ? "Show all segments" : "Show bookmarked only"}
+              >
+                <Icon name="bookmark" size={13} />
+              </button>
+              <select
+                className="transcript-emotion-filter"
+                value={filterEmotion}
+                onChange={(e) => setFilterEmotion(e.target.value)}
+                title="Filter by emotion"
+              >
+                <option value="all">All emotions</option>
+                {["HAPPY", "SAD", "ANGRY", "FEAR", "SURPRISE", "DISGUST", "NEUTRAL"].map((emo) => (
+                  <option key={emo} value={emo}>{emo.charAt(0) + emo.slice(1).toLowerCase()}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                onClick={() => exportSessionCsv(session)}
+                title="Export CSV"
+              >
+                <Icon name="download" size={13} /> CSV
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                onClick={() => exportSessionJson(session)}
+                title="Export JSON"
+              >
+                <Icon name="download" size={13} /> JSON
+              </button>
+            </div>
+          </div>
+          <div className="transcript-search-row">
+            <Icon name="search" size={14} />
+            <input
+              type="text"
+              className="transcript-search-input"
+              placeholder="Search transcript..."
+              value={transcriptSearch}
+              onChange={(e) => setTranscriptSearch(e.target.value)}
+            />
+            {transcriptSearch && (
+              <button type="button" className="transcript-search-clear" onClick={() => setTranscriptSearch("")}>&times;</button>
+            )}
           </div>
           <div className="session-detail-transcript-body" ref={transcriptScrollRef}>
-            {segments.map((seg) => (
+            {segments
+              .filter((seg) => {
+                if (filterBookmarked && !annotations[seg.id]?.bookmarked) return false;
+                if (filterEmotion !== "all" && seg.emotion !== filterEmotion) return false;
+                if (transcriptSearch) {
+                  const q = transcriptSearch.toLowerCase();
+                  const displayText = annotations[seg.id]?.editedText || seg.text;
+                  if (!displayText.toLowerCase().includes(q)) return false;
+                }
+                return true;
+              })
+              .map((seg) => {
+              const ann = annotations[seg.id];
+              const isEditing = editingSegId === seg.id;
+              const displayText = ann?.editedText || seg.text;
+              return (
               <div
                 key={seg.id}
                 id={`detail-seg-${seg.idx}`}
-                className={`detail-seg ${seg.idx === activeSegIdx ? "detail-seg--active" : ""}`}
+                className={`detail-seg ${seg.idx === activeSegIdx ? "detail-seg--active" : ""} ${ann?.bookmarked ? "detail-seg--bookmarked" : ""}`}
                 onClick={() => {
-                  if (displayDuration > 0) seekToTime(seg.offsetSec);
+                  if (displayDuration > 0 && !isEditing) seekToTime(seg.offsetSec);
                 }}
               >
                 <div className="detail-seg-header">
@@ -1104,8 +1263,106 @@ export default function SessionDetail({ sessionId }: Props) {
                       {seg.emotion}
                     </span>
                   )}
+                  <div className="detail-seg-actions">
+                    <button
+                      type="button"
+                      className={`detail-seg-action-btn ${ann?.bookmarked ? "detail-seg-action-btn--active" : ""}`}
+                      onClick={(e) => { e.stopPropagation(); toggleBookmark(seg.id); }}
+                      title={ann?.bookmarked ? "Remove bookmark" : "Bookmark"}
+                      aria-label={ann?.bookmarked ? "Remove bookmark" : "Bookmark segment"}
+                    >
+                      <Icon name="bookmark" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="detail-seg-action-btn"
+                      onClick={(e) => { e.stopPropagation(); startEditing(seg.id, seg.text); }}
+                      title="Edit text"
+                      aria-label="Edit segment text"
+                    >
+                      <Icon name="edit-2" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`detail-seg-action-btn ${ann?.note ? "detail-seg-action-btn--active" : ""}`}
+                      onClick={(e) => { e.stopPropagation(); notingSegId === seg.id ? setNotingSegId(null) : startNoting(seg.id); }}
+                      title={ann?.note ? "Edit note" : "Add note"}
+                      aria-label={ann?.note ? "Edit note" : "Add note"}
+                    >
+                      <Icon name="message-square" size={13} />
+                    </button>
+                  </div>
                 </div>
-                <div className="detail-seg-text">{seg.text}</div>
+                {isEditing ? (
+                  <div className="detail-seg-edit" onClick={(e) => e.stopPropagation()}>
+                    <textarea
+                      className="detail-seg-edit-input"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+                        if (e.key === "Escape") cancelEdit();
+                      }}
+                      autoFocus
+                      rows={2}
+                    />
+                    <div className="detail-seg-edit-actions">
+                      <button type="button" className="btn btn--small btn--primary" onClick={saveEdit}>Save</button>
+                      <button type="button" className="btn btn--small btn--ghost" onClick={cancelEdit}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="detail-seg-text">
+                    {displayText}
+                    {ann?.editedText && <span className="detail-seg-edited-badge" title="Manually edited">edited</span>}
+                  </div>
+                )}
+                {/* Note editor */}
+                {notingSegId === seg.id && (
+                  <div className="detail-seg-note-editor" onClick={(e) => e.stopPropagation()}>
+                    <textarea
+                      className="detail-seg-edit-input"
+                      placeholder="Add a note..."
+                      value={noteText}
+                      onChange={(e) => setNoteText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNote(); }
+                        if (e.key === "Escape") setNotingSegId(null);
+                      }}
+                      autoFocus
+                      rows={2}
+                    />
+                    <div className="detail-seg-note-tag-row">
+                      <input
+                        className="detail-seg-tag-input"
+                        placeholder="Add tag + Enter"
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { e.preventDefault(); addTag(seg.id, tagInput); }
+                        }}
+                      />
+                      <button type="button" className="btn btn--small btn--primary" onClick={saveNote}>Save</button>
+                      <button type="button" className="btn btn--small btn--ghost" onClick={() => setNotingSegId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {/* Display existing note and tags */}
+                {notingSegId !== seg.id && (ann?.note || (ann?.tags && ann.tags.length > 0)) && (
+                  <div className="detail-seg-annotations" onClick={(e) => e.stopPropagation()}>
+                    {ann?.note && <div className="detail-seg-note">{ann.note}</div>}
+                    {ann?.tags && ann.tags.length > 0 && (
+                      <div className="detail-seg-tags">
+                        {ann.tags.map((tag) => (
+                          <span key={tag} className="detail-seg-tag">
+                            {tag}
+                            <button type="button" className="detail-seg-tag-remove" onClick={() => removeTag(seg.id, tag)} aria-label={`Remove tag ${tag}`}>&times;</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Per-second emotion mini-timeline */}
                 {seg.emotionTimelineUtterance && seg.emotionTimelineUtterance.length > 1 && (
                   <div className="detail-seg-emotion-timeline">
@@ -1173,9 +1430,13 @@ export default function SessionDetail({ sessionId }: Props) {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
             {segments.length === 0 && (
               <div className="session-detail-message">No transcript available.</div>
+            )}
+            {filterBookmarked && segments.filter((s) => annotations[s.id]?.bookmarked).length === 0 && (
+              <div className="session-detail-message">No bookmarked segments.</div>
             )}
           </div>
         </div>

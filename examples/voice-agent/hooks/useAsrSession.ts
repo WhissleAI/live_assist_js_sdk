@@ -191,19 +191,34 @@ export function useAsrSession(
     const sliceRaw = globalTl.slice(emotionTimelineIdxAtLastFlushRef.current);
     emotionTimelineIdxAtLastFlushRef.current = globalTl.length;
 
-    const minGlobalMs = sliceRaw.length
-      ? Math.min(...sliceRaw.map((e) => e.offset))
-      : utteranceAudioStartMsRef.current ?? 0;
-    const audioOffsetSec = minGlobalMs / 1000;
+    // Compute audioOffsetSec relative to mic audio start.
+    // Priority: emotion timeline offsets > ASR audioOffset > wall-clock fallback.
+    const audioStart = sessionRef.current.audioStartMs ?? sessionRef.current.sessionStart;
+    let audioOffsetSec: number;
+    if (sliceRaw.length > 0) {
+      // Best: use emotion timeline offsets (ms from ASR stream start)
+      audioOffsetSec = Math.min(...sliceRaw.map((e) => e.offset)) / 1000;
+    } else if (utteranceAudioStartMsRef.current != null && utteranceAudioStartMsRef.current > 0) {
+      // Good: use ASR audioOffset (ms from stream start)
+      audioOffsetSec = utteranceAudioStartMsRef.current / 1000;
+    } else if (audioStart != null) {
+      // Fallback: wall-clock time relative to audio start
+      audioOffsetSec = Math.max(0, (Date.now() - audioStart) / 1000);
+    } else {
+      audioOffsetSec = 0;
+    }
 
     const emotionTimelineUtterance =
       sliceRaw.length > 0
-        ? sliceRaw.map((e) => ({
-            offset: (e.offset - minGlobalMs) / 1000,
-            emotion: e.emotion,
-            confidence: e.confidence,
-            probs: e.probs,
-          }))
+        ? (() => {
+            const minMs = Math.min(...sliceRaw.map((e) => e.offset));
+            return sliceRaw.map((e) => ({
+              offset: (e.offset - minMs) / 1000,
+              emotion: e.emotion,
+              confidence: e.confidence,
+              probs: e.probs,
+            }));
+          })()
         : undefined;
 
     utteranceAudioStartMsRef.current = null;
@@ -261,6 +276,7 @@ export function useAsrSession(
     emotionTimelineIdxAtLastFlushRef.current = 0;
     utteranceAudioStartMsRef.current = null;
 
+    const audioStartMs = Date.now();
     updateSession({
       isActive: true,
       isConnected: false,
@@ -272,7 +288,10 @@ export function useAsrSession(
       profile: null,
       speakerLabel: "user",
       error: null,
-      sessionStart: Date.now(),
+      // Set audioStartMs to mark when mic/ASR audio begins (the reference for all audioOffsetSec values).
+      // Only set sessionStart if it wasn't already set by the caller (e.g. AgentRuntime.handleStart).
+      ...(sessionRef.current.sessionStart == null ? { sessionStart: audioStartMs } : {}),
+      audioStartMs,
     });
 
     try {

@@ -169,6 +169,47 @@ export async function uploadToGcs(
   return anyUploaded;
 }
 
+/** Maximum age in days before audio blobs are pruned. */
+const AUDIO_TTL_DAYS = 30;
+
+/**
+ * Prune audio blobs older than TTL or orphaned (no matching session).
+ * Call this on app startup to keep IndexedDB from growing unbounded.
+ */
+export async function pruneAudioStore(activeSessionIds: Set<string>): Promise<number> {
+  let pruned = 0;
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.getAll();
+    const records = await new Promise<AudioRecord[]>((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result ?? []);
+      req.onerror = () => reject(req.error);
+    });
+
+    const cutoff = Date.now() - AUDIO_TTL_DAYS * 24 * 60 * 60 * 1000;
+    for (const record of records) {
+      const createdMs = new Date(record.createdAt).getTime();
+      const isExpired = createdMs < cutoff;
+      const isOrphaned = !activeSessionIds.has(record.sessionId);
+      if (isExpired || isOrphaned) {
+        store.delete(record.sessionId);
+        pruned++;
+      }
+    }
+
+    await new Promise<void>((res, rej) => {
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  } catch (e) {
+    console.warn("[AudioStore] prune failed:", e);
+  }
+  return pruned;
+}
+
 export async function deleteAudio(sessionId: string): Promise<void> {
   try {
     const db = await openDb();

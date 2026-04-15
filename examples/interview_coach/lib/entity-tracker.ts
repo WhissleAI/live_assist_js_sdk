@@ -68,9 +68,13 @@ export function createAlignmentTracker(gapAnalysis: GapAnalysis | null): {
         ([, syns]) => syns.some((s) => skillLower.includes(s))
       );
 
-      const termsToCheck = synonyms ? synonyms[1] : [skillLower];
+      const termsToCheck = synonyms ? [...synonyms[1]] : [skillLower];
+      // For 3+ word skills (e.g. "distributed systems design"), add individual
+      // words as fallback terms if they're specific enough (8+ chars).
+      // Don't split 1-2 word skills — their synonyms or full phrase are sufficient,
+      // and individual words like "learning" or "machine" cause false positives.
       const words = skillLower.split(/\s+/);
-      if (words.length <= 2) termsToCheck.push(...words.filter((w) => w.length > 3));
+      if (words.length >= 3) termsToCheck.push(...words.filter((w) => w.length >= 8));
 
       for (const term of termsToCheck) {
         if (lower.includes(term)) {

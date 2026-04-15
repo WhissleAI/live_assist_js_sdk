@@ -1,23 +1,28 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, Suspense, lazy } from "react";
 import type { BehavioralProfile } from "@whissle/live-assist-core";
 import AgentRuntime from "./components/AgentRuntime";
 import AdminPortal from "./components/AdminPortal";
-import AgentBuilder from "./components/AgentBuilder";
+import ErrorBoundary from "./components/ErrorBoundary";
 import AppShell from "./components/AppShell";
-import SessionsPage from "./components/SessionsPage";
-import SessionDetail from "./components/SessionDetail";
-import TranscribePage from "./components/TranscribePage";
-import TtsPlaygroundPage from "./components/TtsPlaygroundPage";
-import ResearchPage from "./components/ResearchPage";
-import VideoToMusicPage from "./components/VideoToMusicPage";
-import MemoryPage from "./components/MemoryPage";
-import UsagePage from "./components/UsagePage";
-import SettingsPage from "./components/SettingsPage";
 import { ToastContainer } from "./components/Toast";
 import { ConfirmModalContainer } from "./components/ConfirmModal";
 import { gatewayConfig } from "./lib/gateway-config";
 import { syncFromBackend } from "./lib/agent-store";
+import { loadSessions } from "./lib/session-store";
+import { pruneAudioStore } from "./lib/audio-store";
 import type { AgentConfig } from "./lib/agent-config";
+
+// Lazy-loaded pages — only fetched when navigated to
+const AgentBuilder = lazy(() => import("./components/AgentBuilder"));
+const SessionsPage = lazy(() => import("./components/SessionsPage"));
+const SessionDetail = lazy(() => import("./components/SessionDetail"));
+const TranscribePage = lazy(() => import("./components/TranscribePage"));
+const TtsPlaygroundPage = lazy(() => import("./components/TtsPlaygroundPage"));
+const ResearchPage = lazy(() => import("./components/ResearchPage"));
+const VideoToMusicPage = lazy(() => import("./components/VideoToMusicPage"));
+const MemoryPage = lazy(() => import("./components/MemoryPage"));
+const UsagePage = lazy(() => import("./components/UsagePage"));
+const SettingsPage = lazy(() => import("./components/SettingsPage"));
 
 export interface EmotionTimelineEntry {
   offset: number;
@@ -80,6 +85,8 @@ export interface SessionState {
   speakerLabel: "user" | "other";
   error: string | null;
   sessionStart: number | null;
+  /** Wall-clock ms when mic/ASR audio streaming began — the reference point for all audioOffsetSec values. */
+  audioStartMs: number | null;
   agentId: string;
   flaggedConcerns: Array<{ text: string; emotion: string; severity: string; reason: string; timestamp: number }>;
   topicsDiscussed: string[];
@@ -106,7 +113,8 @@ type Route =
   | { page: "usage" }
   | { page: "settings" }
   | { page: "runtime"; agentId: string }
-  | { page: "embed"; agentId: string };
+  | { page: "embed"; agentId: string }
+  | { page: "not-found" };
 
 function parseRoute(hash: string): Route {
   const h = hash.replace(/^#\/?/, "");
@@ -139,12 +147,17 @@ function parseRoute(hash: string): Route {
   if (h === "usage") return { page: "usage" };
   if (h === "settings") return { page: "settings" };
 
-  return { page: "voice-agents" };
+  // Empty hash or root — go to dashboard
+  if (!h) return { page: "voice-agents" };
+
+  // Unknown route — show 404
+  return { page: "not-found" };
 }
 
 function getActivePage(route: Route): string {
   if (route.page === "voice-agents" || route.page === "builder") return "voice-agents";
   if (route.page === "sessions" || route.page === "session-detail") return "sessions";
+  if (route.page === "not-found") return "";
   return route.page;
 }
 
@@ -189,6 +202,7 @@ const INITIAL_SESSION: SessionState = {
   speakerLabel: "user",
   error: null,
   sessionStart: null,
+  audioStartMs: null,
   agentId: "",
   flaggedConcerns: [],
   topicsDiscussed: [],
@@ -227,6 +241,9 @@ export default function App() {
       // Sync agent configs with backend after session is established
       syncFromBackend().catch(() => {});
     }).catch(() => {});
+    // Prune orphaned/expired audio blobs from IndexedDB
+    const sessionIds = new Set(loadSessions().map((s) => s.id));
+    pruneAudioStore(sessionIds).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -298,6 +315,19 @@ export default function App() {
     case "settings":
       content = <SettingsPage />;
       break;
+    case "not-found":
+      content = (
+        <div className="not-found-page">
+          <h1 className="not-found-title">404</h1>
+          <p className="not-found-text">
+            Page not found. The page you're looking for doesn't exist or has been moved.
+          </p>
+          <button type="button" className="btn btn--primary" onClick={() => navigate("")}>
+            Go to Dashboard
+          </button>
+        </div>
+      );
+      break;
     case "voice-agents":
     default:
       content = (
@@ -316,9 +346,13 @@ export default function App() {
   return (
     <>
       <AppShell activePage={activePage}>
-        <div className={pageClass} key={route.page} ref={mainContentRef} tabIndex={-1} style={{ outline: "none" }}>
-          {content}
-        </div>
+        <ErrorBoundary>
+          <Suspense fallback={<div className="page-loading"><div className="page-loading-spinner" /></div>}>
+            <div className={pageClass} key={route.page} ref={mainContentRef} tabIndex={-1} style={{ outline: "none" }}>
+              {content}
+            </div>
+          </Suspense>
+        </ErrorBoundary>
       </AppShell>
       <ToastContainer />
       <ConfirmModalContainer />

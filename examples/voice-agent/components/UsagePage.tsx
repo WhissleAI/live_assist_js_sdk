@@ -96,6 +96,9 @@ export default function UsagePage() {
           </div>
           <h3>{error}</h3>
           <p>This feature may not be enabled for your account.</p>
+          <button type="button" className="btn btn--secondary" style={{ marginTop: 16 }} onClick={fetchUsage}>
+            <Icon name="refresh-cw" size={14} /> Retry
+          </button>
         </div>
       )}
 

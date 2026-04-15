@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { InterviewConfig } from "../App";
 import type { GapAnalysis } from "../lib/prep";
 import { buildPrepPrompt, parsePrepResponse } from "../lib/prep";
@@ -13,56 +13,77 @@ interface Props {
 
 export default function PrepBrief({ config, onDone, onSkip, onBack }: Props) {
   const [loading, setLoading] = useState(true);
+  const [streamProgress, setStreamProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [gap, setGap] = useState<GapAnalysis | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  const runAnalysis = useCallback(async (abort: AbortController) => {
+    setLoading(true);
+    setStreamProgress(0);
+    setError(null);
+    setGap(null);
+
+    try {
+      const prompt = buildPrepPrompt(config.jdText, config.resumeText);
+      const messages = [
+        { role: "system" as const, content: "You are a career coach. Analyze the job description and resume. Return ONLY a JSON object." },
+        { role: "user" as const, content: prompt },
+      ];
+
+      let fullText = "";
+      let chunkCount = 0;
+      const stream = streamAgentChat(config.agentUrl, messages, abort.signal);
+      for await (const token of stream) {
+        if (abort.signal.aborted) return;
+        if (typeof token === "string") {
+          fullText += token;
+          chunkCount++;
+          setStreamProgress(Math.min(chunkCount * 3, 90));
+        }
+      }
+
+      if (abort.signal.aborted) return;
+
+      const parsed = parsePrepResponse(fullText);
+      if (parsed) {
+        setGap(parsed);
+      } else {
+        setError("Could not parse analysis. You can still start the interview.");
+      }
+      setLoading(false);
+    } catch (err: unknown) {
+      if (abort.signal.aborted) return;
+      setError(err instanceof Error ? err.message : "Analysis failed");
+      setLoading(false);
+    }
+  }, [config]);
 
   useEffect(() => {
     const abort = new AbortController();
     abortRef.current = abort;
-
-    async function analyze() {
-      try {
-        const prompt = buildPrepPrompt(config.jdText, config.resumeText);
-        const messages = [
-          { role: "system" as const, content: "You are a career coach. Analyze the job description and resume. Return ONLY a JSON object." },
-          { role: "user" as const, content: prompt },
-        ];
-
-        let fullText = "";
-        const stream = streamAgentChat(config.agentUrl, messages, abort.signal);
-        for await (const token of stream) {
-          if (abort.signal.aborted) return;
-          if (typeof token === "string") fullText += token;
-        }
-
-        if (abort.signal.aborted) return;
-
-        const parsed = parsePrepResponse(fullText);
-        if (parsed) {
-          setGap(parsed);
-        } else {
-          setError("Could not parse analysis. You can still start the interview.");
-        }
-        setLoading(false);
-      } catch (err: unknown) {
-        if (abort.signal.aborted) return;
-        setError(err instanceof Error ? err.message : "Analysis failed");
-        setLoading(false);
-      }
-    }
-
-    analyze();
+    runAnalysis(abort);
     return () => { abort.abort(); abortRef.current = null; };
-  }, [config]);
+  }, [runAnalysis, retryCount]);
+
+  const handleRetry = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
+    setRetryCount((c) => c + 1);
+  }, []);
 
   if (loading) {
     return (
       <div className="prep-root">
-        <div className="prep-loading">
+        <div className="prep-loading" role="status" aria-label="Analyzing your profile">
           <div className="prep-spinner" />
           <h2>Analyzing your profile...</h2>
           <p>Comparing JD requirements against your resume</p>
+          {streamProgress > 0 && (
+            <div className="prep-progress-bar">
+              <div className="prep-progress-fill" style={{ width: `${streamProgress}%` }} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -72,7 +93,12 @@ export default function PrepBrief({ config, onDone, onSkip, onBack }: Props) {
     <div className="prep-root">
       <div className="prep-header">
         <h1>Interview Prep Brief</h1>
-        {error && <p className="prep-error">{error}</p>}
+        {error && (
+          <div className="prep-error-row">
+            <p className="prep-error">{error}</p>
+            <button type="button" className="prep-retry-btn" onClick={handleRetry}>Retry Analysis</button>
+          </div>
+        )}
       </div>
 
       <div className="prep-scroll">

@@ -283,7 +283,7 @@ export function EmotionTimelineBar({
 
     if (onSeek && playheadDur > 0 && currentTimeSec > 0 && currentTimeSec <= playheadDur) {
       const px = (currentTimeSec / playheadDur) * W;
-      ctx.fillStyle = "#1e293b";
+      ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--color-text").trim() || "#1e293b";
       ctx.fillRect(px - 1, 0, 2, H);
     }
   }, [
@@ -619,8 +619,8 @@ export function EmotionTimelineBar({
                 width: 10,
                 height: 10,
                 borderRadius: "50%",
-                background: "#1e293b",
-                border: "2px solid #fff",
+                background: "var(--color-text, #1e293b)",
+                border: "2px solid var(--color-bg, #fff)",
                 boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
                 pointerEvents: "none",
                 transform: "translate(-50%, -50%)",
@@ -637,8 +637,8 @@ export function EmotionTimelineBar({
             left: tip.x,
             top: tip.y - 8,
             transform: "translate(-50%, -100%)",
-            background: "#1e293b",
-            color: "#f8fafc",
+            background: "var(--color-text, #1e293b)",
+            color: "var(--color-bg, #f8fafc)",
             fontSize: 11,
             fontWeight: 500,
             padding: "5px 10px",

@@ -6,14 +6,14 @@ interface Toast {
   type: "success" | "error" | "info";
 }
 
-let _setToasts: React.Dispatch<React.SetStateAction<Toast[]>> | null = null;
+const _listeners = new Set<React.Dispatch<React.SetStateAction<Toast[]>>>();
 let _nextId = 0;
 
 export function showToast(message: string, type: "success" | "error" | "info" = "info") {
   const id = ++_nextId;
-  _setToasts?.((prev) => [...prev, { id, message, type }]);
+  _listeners.forEach((set) => set((prev) => [...prev, { id, message, type }]));
   setTimeout(() => {
-    _setToasts?.((prev) => prev.filter((t) => t.id !== id));
+    _listeners.forEach((set) => set((prev) => prev.filter((t) => t.id !== id)));
   }, 4000);
 }
 
@@ -33,16 +33,16 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
 
 export function ToastContainer() {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  _setToasts = setToasts;
+
+  useEffect(() => {
+    _listeners.add(setToasts);
+    return () => {
+      _listeners.delete(setToasts);
+    };
+  }, []);
 
   const handleDismiss = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      _setToasts = null;
-    };
   }, []);
 
   if (toasts.length === 0) return null;

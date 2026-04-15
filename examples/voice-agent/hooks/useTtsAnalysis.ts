@@ -76,13 +76,15 @@ export function useTtsAnalysis(asrUrl: string, sessionOpts?: TtsAnalysisSessionO
           if (sessionOpts?.emotionProbsOutRef) sessionOpts.emotionProbsOutRef.current = probMap;
         }
 
-        if (sessionOpts && seg.metadata_probs_timeline?.length && sessionStart) {
+        // Use audioStartMs (mic audio start) as reference so TTS timeline aligns with mic audio time
+        const audioStart = sessionOpts?.sessionRef.current.audioStartMs ?? sessionStart;
+        if (sessionOpts && seg.metadata_probs_timeline?.length && audioStart) {
           const newEntries: EmotionTimelineEntry[] = [];
           for (const tw of seg.metadata_probs_timeline) {
             if (!tw.emotion?.length) continue;
             const streamT = (seg.audioOffset ?? 0) + (tw.offset ?? 0);
             if (ttsAnchorSessionMsRef.current === null) {
-              ttsAnchorSessionMsRef.current = Date.now() - sessionStart - streamT;
+              ttsAnchorSessionMsRef.current = Date.now() - audioStart - streamT;
             }
             const anchor = ttsAnchorSessionMsRef.current;
             const offsetMs = anchor + (seg.audioOffset ?? 0) + (tw.offset ?? 0);

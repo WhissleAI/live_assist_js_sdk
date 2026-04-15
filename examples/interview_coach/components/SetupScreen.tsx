@@ -16,13 +16,14 @@ const DIFFICULTIES: { id: Difficulty; label: string; desc: string }[] = [
 ];
 
 interface FileUploadProps {
+  id: string;
   label: string;
   text: string;
   onChange: (text: string) => void;
   placeholder: string;
 }
 
-function FileUploadField({ label, text, onChange, placeholder }: FileUploadProps) {
+function FileUploadField({ id, label, text, onChange, placeholder }: FileUploadProps) {
   const [fileName, setFileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,16 +64,17 @@ function FileUploadField({ label, text, onChange, placeholder }: FileUploadProps
 
   return (
     <div className="setup-col">
-      <label className="setup-label">{label}</label>
+      <label className="setup-label" htmlFor={id}>{label}</label>
       <div className="setup-upload-row">
         <button type="button" className="setup-upload-btn" onClick={() => fileRef.current?.click()} disabled={loading}>
           {loading ? "Extracting..." : "Upload PDF"}
         </button>
         {fileName && <span className="setup-upload-filename">{fileName}</span>}
-        {error && <span className="setup-upload-error">{error}</span>}
-        <input ref={fileRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={handleFile} hidden />
+        {error && <span className="setup-upload-error" role="alert">{error}</span>}
+        <input ref={fileRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={handleFile} hidden aria-label={`Upload file for ${label}`} />
       </div>
       <textarea
+        id={id}
         className="setup-textarea"
         placeholder={placeholder}
         value={text}
@@ -96,33 +98,37 @@ export default function SetupScreen({ initialConfig, onDone }: Props) {
   return (
     <div className="setup-root">
       <div className="setup-header">
-        <div className="setup-logo">🎯</div>
+        <div className="setup-logo">Whissle</div>
         <h1 className="setup-title">Interview Coach</h1>
         <p className="setup-subtitle">Practice interviews with real-time voice delivery coaching powered by Whissle</p>
       </div>
 
       <div className="setup-body">
         <FileUploadField
-          label="Job Description"
+          id="setup-jd"
+          label="Job Description (optional)"
           text={jdText}
           onChange={setJdText}
-          placeholder="Paste the job posting here or upload a PDF..."
+          placeholder="Paste the job posting here or upload a PDF. Skip for a general interview."
         />
         <FileUploadField
-          label="Your Resume / CV"
+          id="setup-resume"
+          label="Your Resume / CV (optional)"
           text={resumeText}
           onChange={setResumeText}
-          placeholder="Paste your resume text here or upload a PDF..."
+          placeholder="Paste your resume text here or upload a PDF. Skip for generic questions."
         />
       </div>
 
       <div className="setup-footer">
         <div className="setup-options-row">
-          <div className="setup-difficulty-row">
+          <div className="setup-difficulty-row" role="radiogroup" aria-label="Interview difficulty">
             {DIFFICULTIES.map((d) => (
               <button
                 key={d.id}
                 type="button"
+                role="radio"
+                aria-checked={difficulty === d.id}
                 className={`setup-diff-btn ${difficulty === d.id ? "setup-diff-btn--active" : ""}`}
                 onClick={() => setDifficulty(d.id)}
               >

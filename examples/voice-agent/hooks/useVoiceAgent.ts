@@ -15,6 +15,7 @@ import {
 } from "../lib/agent-stream";
 import { CartesiaTtsClient } from "../lib/cartesia-tts";
 import type { AgentConfig } from "../lib/agent-config";
+import { getCartesiaApiKey } from "../lib/tts-proxy";
 import { resolveVoiceId, DEFAULT_VOICE_ID } from "../lib/voice-catalog";
 
 export type { AgentToolEvent };
@@ -38,7 +39,7 @@ interface UseVoiceAgentOpts {
   genderProbs?: Array<{ token: string; probability: number }>;
   ageProbs?: Array<{ token: string; probability: number }>;
   // Session-level behavioral data
-  behavioralProfile?: Record<string, unknown> | null;
+  behavioralProfile?: { emotionProfile: Record<string, number>; intentProfile: Record<string, number>; segmentCount: number } | Record<string, unknown> | null;
   voiceProfileSummary?: string;
   onToolCall?: (event: AgentToolEvent) => void;
   onStep?: (title: string, status?: string) => void;
@@ -146,7 +147,7 @@ export function useVoiceAgent({
       return;
     }
 
-    const apiKey = import.meta.env.VITE_CARTESIA_API_KEY as string;
+    const apiKey = getCartesiaApiKey();
     const cfg = agentConfigRef.current;
     const rawVoiceId = cfg.voiceId || (import.meta.env.VITE_CARTESIA_VOICE_ID as string);
     const voiceId = resolveVoiceId(rawVoiceId);

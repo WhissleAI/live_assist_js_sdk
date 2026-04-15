@@ -44,15 +44,15 @@ export default class ErrorBoundary extends React.Component<
             height: "100vh",
             padding: 32,
             fontFamily: "var(--font-body, 'Atkinson Hyperlegible', system-ui, sans-serif)",
-            color: "#1e293b",
-            background: "#f8fafc",
+            color: "var(--color-text, #1e293b)",
+            background: "var(--color-bg, #f8fafc)",
             textAlign: "center",
           }}
         >
           <h1 style={{ fontSize: "1.5rem", marginBottom: 8, fontWeight: 700, fontFamily: "var(--font-display, 'Sora', system-ui, sans-serif)" }}>
             Something went wrong
           </h1>
-          <p style={{ color: "#64748b", maxWidth: 420, marginBottom: 24, lineHeight: 1.5 }}>
+          <p style={{ color: "var(--color-text-secondary, #64748b)", maxWidth: 420, marginBottom: 24, lineHeight: 1.5 }}>
             {this.state.error?.message || "An unexpected error occurred."}
           </p>
           <div style={{ display: "flex", gap: 12 }}>
@@ -60,7 +60,7 @@ export default class ErrorBoundary extends React.Component<
               onClick={this.handleReset}
               style={{
                 padding: "10px 20px",
-                background: "var(--color-accent, #e63946)",
+                background: "var(--color-primary, #124e3f)",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,
@@ -76,8 +76,8 @@ export default class ErrorBoundary extends React.Component<
               style={{
                 padding: "10px 20px",
                 background: "transparent",
-                color: "#64748b",
-                border: "1px solid #e2e8f0",
+                color: "var(--color-text-secondary, #64748b)",
+                border: "1px solid var(--color-border, #e2e8f0)",
                 borderRadius: 8,
                 cursor: "pointer",
                 fontSize: "0.9rem",

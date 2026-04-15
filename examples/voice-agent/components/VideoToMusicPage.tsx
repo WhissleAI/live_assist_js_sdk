@@ -105,6 +105,11 @@ export default function VideoToMusicPage() {
       setError("Please upload a video file (mp4, mov, webm, etc.)");
       return;
     }
+    const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`File is too large (${Math.round(file.size / 1024 / 1024)}MB). Maximum size is 500MB.`);
+      return;
+    }
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoFile(file);
     setVideoUrl(URL.createObjectURL(file));
@@ -397,6 +402,15 @@ export default function VideoToMusicPage() {
               >
                 {loading ? "Generating..." : musicUrl ? "Regenerate" : "Generate Music"}
               </button>
+              {loading && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => { abortRef.current?.abort(); setLoading(false); }}
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           )}
 

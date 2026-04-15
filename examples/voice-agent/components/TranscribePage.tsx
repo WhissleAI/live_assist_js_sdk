@@ -18,15 +18,36 @@ const INITIAL_SESSION: SessionState = {
   speakerLabel: "user",
   error: null,
   sessionStart: null,
+  audioStartMs: null,
   agentId: "transcribe",
   flaggedConcerns: [],
   topicsDiscussed: [],
 };
 
+function useElapsedTimer(active: boolean): string {
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(0);
+
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0);
+      return;
+    }
+    startRef.current = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+
+  const m = Math.floor(elapsed / 60);
+  const s = elapsed % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export default function TranscribePage() {
   const sessionRef = useRef<SessionState>({ ...INITIAL_SESSION });
   const [session, setSession] = useState<SessionState>(sessionRef.current);
   const [mode, setMode] = useState<"live" | "upload">("live");
+  const elapsedTime = useElapsedTimer(session.isActive);
 
   const updateSession = useCallback((patch: Partial<SessionState>) => {
     const next = { ...sessionRef.current, ...patch };
@@ -106,7 +127,7 @@ export default function TranscribePage() {
             </button>
             <div>
               <div className="transcribe-status">
-                {session.isActive ? "Recording..." : "Click to start"}
+                {session.isActive ? <><span className="transcribe-timer">{elapsedTime}</span> Recording...</> : "Click to start"}
               </div>
               {session.isConnected && (
                 <div className="transcribe-connected">
@@ -158,7 +179,13 @@ function UploadTranscribe() {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200 MB
+
   const pickFile = useCallback((f: File) => {
+    if (f.size > MAX_FILE_SIZE) {
+      setError(`File too large (${(f.size / 1024 / 1024).toFixed(0)} MB). Maximum size is 200 MB.`);
+      return;
+    }
     setFile(f);
     setTranscript("");
     setError(null);

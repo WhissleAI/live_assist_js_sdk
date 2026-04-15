@@ -8,7 +8,7 @@ import {
 import type { StreamTranscriptSegment } from "@whissle/live-assist-core";
 import { streamAgentChat } from "../lib/agent-stream";
 import type { ChatMessage } from "../lib/agent-stream";
-import type { ToolCallResult } from "../lib/tools";
+import type { ToolCallResult } from "../lib/roles";
 import { RimeTtsClient } from "../lib/rime-tts";
 import { INTERVIEW_TOOLS, buildSystemPrompt } from "../lib/roles";
 import type { AnswerScore } from "../lib/scoring";
@@ -23,9 +23,9 @@ import {
   generatePauseHints,
   generateStabilityHints,
   pickTopHints,
-  resetHintState,
+  createHintState,
 } from "../lib/hints";
-import type { Hint, HintContext } from "../lib/hints";
+import type { Hint, HintContext, HintState } from "../lib/hints";
 import type { GapAnalysis } from "../lib/prep";
 import type { InterviewConfig } from "../App";
 import { createAlignmentTracker } from "../lib/entity-tracker";
@@ -69,6 +69,7 @@ export interface InterviewState {
   jdAlignment: AlignmentState | null;
   vocalStability: number;
   thinkTimeSec: number;
+  sessionElapsedSec: number;
 }
 
 export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInterviewSessionProps) {
@@ -94,6 +95,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
     jdAlignment: null,
     vocalStability: 100,
     thinkTimeSec: 0,
+    sessionElapsedSec: 0,
   });
 
   const asrRef = useRef<AsrStreamClient | null>(null);
@@ -123,6 +125,10 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
   const alignmentTrackerRef = useRef(createAlignmentTracker(gapAnalysis));
   const vocalTrackerRef = useRef(new VocalStabilityTracker());
   const intentTrackerRef = useRef(new IntentFlowTracker());
+  const hintStateRef = useRef<HintState>(createHintState());
+
+  const sessionStartTimeRef = useRef(0);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const agentDoneSpeakingRef = useRef(0);
   const firstSegmentReceivedRef = useRef(false);
@@ -144,6 +150,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
     longestPauseRef.current = 0;
     vocalTrackerRef.current.reset();
     intentTrackerRef.current.reset();
+    hintStateRef.current = createHintState();
     setState((prev) => ({
       ...prev,
       partialTranscript: "",
@@ -156,7 +163,6 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       vocalStability: 100,
       thinkTimeSec: 0,
     }));
-    resetHintState();
   }, []);
 
   const generateHints = useCallback(() => {
@@ -194,14 +200,15 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       isHedging: intentTrackerRef.current.isHedging,
     };
 
-    const delivery = generateDeliveryHints(ctx);
+    const hs = hintStateRef.current;
+    const delivery = generateDeliveryHints(ctx, hs);
     const content = generateContentHints(ctx);
     const meta = generateMetaHints(ctx);
     const alignment = generateAlignmentHints(ctx);
     const pause = generatePauseHints(ctx);
     const stability = generateStabilityHints(ctx);
     const all = [...meta, ...alignment, ...stability, ...delivery, ...pause, ...content];
-    const picked = pickTopHints(all);
+    const picked = pickTopHints(all, 2, hs);
 
     if (picked.length > 0) {
       setState((prev) => ({ ...prev, activeHints: picked }));
@@ -227,17 +234,18 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       const text = seg.text.trim();
       if (!text) return;
 
-      answerSegmentsRef.current.push({ text, audioOffset: seg.audioOffset ?? now });
-
-      const { count } = countFillers(text);
-      fillerCountRef.current += count;
-
-      const wpm = computeWPM(answerSegmentsRef.current);
       const elapsed = (now - answerStartRef.current) / 1000;
 
       if (seg.is_final) {
-        fullTranscriptRef.current += (fullTranscriptRef.current ? " " : "") + text;
+        answerSegmentsRef.current.push({ text, audioOffset: seg.audioOffset ?? now });
 
+        // Count fillers only on final segments to avoid double-counting
+        // from overlapping partial updates
+        const { count } = countFillers(text);
+        fillerCountRef.current += count;
+
+        fullTranscriptRef.current += (fullTranscriptRef.current ? " " : "") + text;
+        const wpm = computeWPM(answerSegmentsRef.current);
         const alignment = alignmentTrackerRef.current.processText(text, elapsed);
         setState((prev) => ({
           ...prev,
@@ -252,8 +260,6 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
         setState((prev) => ({
           ...prev,
           partialTranscript: text,
-          fillerCount: fillerCountRef.current,
-          speakingPaceWPM: wpm,
           answerDurationSec: elapsed,
         }));
       }
@@ -369,7 +375,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       emotionAccRef.current,
       intentAccRef.current,
       fillerCountRef.current,
-      answerSegmentsRef.current.length > 1 ? [computeWPM(answerSegmentsRef.current)] : [],
+      [computeWPM(answerSegmentsRef.current)].filter((w) => w > 0),
       durationSec,
     );
     const moments = identifyKeyMoments(answerEmotionTimelineRef.current, answerStartRef.current);
@@ -380,6 +386,8 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       fillerBreakdown,
       answerStartRef.current,
     );
+
+    const intentAnalysis = intentTrackerRef.current.analyze();
 
     const score: AnswerScore = {
       questionIndex: questionIndexRef.current,
@@ -399,6 +407,11 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       suggestedReframe: (args.suggested_reframe as string) ?? "",
       behavioralNarrative,
       fillerBreakdown,
+      vocalStability: vocalTrackerRef.current.averageStability,
+      convictionMoments: vocalTrackerRef.current.convictionMoments,
+      microNervousMoments: vocalTrackerRef.current.microNervousMoments,
+      intentPattern: intentAnalysis.pattern,
+      intentShift: intentAnalysis.dominantShift,
     };
 
     answersRef.current = [...answersRef.current, score];
@@ -490,7 +503,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
           emotionAccRef.current,
           intentAccRef.current,
           fillerCountRef.current,
-          answerSegmentsRef.current.length > 1 ? [computeWPM(answerSegmentsRef.current)] : [],
+          [computeWPM(answerSegmentsRef.current)].filter((w) => w > 0),
           (Date.now() - answerStartRef.current) / 1000,
         );
 
@@ -501,6 +514,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
           fbFillers.fillers,
           answerStartRef.current,
         );
+        const fbIntentAnalysis = intentTrackerRef.current.analyze();
         const fallbackScore: AnswerScore = {
           questionIndex: questionIndexRef.current,
           questionText: questionTextRef.current,
@@ -519,6 +533,11 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
           suggestedReframe: "",
           behavioralNarrative: fbNarrative,
           fillerBreakdown: fbFillers.fillers,
+          vocalStability: vocalTrackerRef.current.averageStability,
+          convictionMoments: vocalTrackerRef.current.convictionMoments,
+          microNervousMoments: vocalTrackerRef.current.microNervousMoments,
+          intentPattern: fbIntentAnalysis.pattern,
+          intentShift: fbIntentAnalysis.dominantShift,
         };
 
         answersRef.current = [...answersRef.current, fallbackScore];
@@ -531,9 +550,12 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
         resetAnswerState();
       }
 
-      if (ttsRef.current) ttsRef.current.flush();
-
-      agentDoneSpeakingRef.current = Date.now();
+      if (ttsRef.current) {
+        ttsRef.current.flush();
+      } else {
+        // No TTS — mark agent as done speaking immediately
+        agentDoneSpeakingRef.current = Date.now();
+      }
     } catch (err: unknown) {
       if ((err as Error)?.name !== "AbortError") {
         setState((prev) => ({ ...prev, error: (err as Error)?.message ?? "Agent stream failed" }));
@@ -586,6 +608,8 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       questionTextRef.current = "";
       profileRef.current.reset();
 
+      sessionStartTimeRef.current = Date.now();
+
       setState((prev) => ({
         ...prev,
         isActive: true,
@@ -597,9 +621,16 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
         jdAlignment: alignmentTrackerRef.current.state,
         vocalStability: 100,
         thinkTimeSec: 0,
+        sessionElapsedSec: 0,
       }));
 
       hintIntervalRef.current = setInterval(generateHints, 4000);
+      elapsedTimerRef.current = setInterval(() => {
+        setState((prev) => ({
+          ...prev,
+          sessionElapsedSec: Math.floor((Date.now() - sessionStartTimeRef.current) / 1000),
+        }));
+      }, 1000);
 
       sendToAgent("Start the interview. Greet me and ask the first question.");
     } catch (err: unknown) {
@@ -627,6 +658,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
 
   const stop = useCallback(() => {
     if (hintIntervalRef.current) { clearInterval(hintIntervalRef.current); hintIntervalRef.current = null; }
+    if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null; }
     if (streamAbortRef.current) { streamAbortRef.current.abort(); streamAbortRef.current = null; }
     sendingRef.current = false;
 
