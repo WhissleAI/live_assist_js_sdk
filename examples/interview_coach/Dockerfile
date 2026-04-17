@@ -4,6 +4,7 @@
 ##   docker build --platform linux/amd64 \
 ##     -f examples/interview_coach/Dockerfile \
 ##     --build-arg VITE_GATEWAY_URL=https://api.whissle.ai \
+##     --build-arg VITE_CARTESIA_API_KEY=sk_car_... \
 ##     -t interview-coach:latest .
 ##
 ## Run locally:
@@ -12,6 +13,7 @@
 FROM node:20-slim AS builder
 
 ARG VITE_GATEWAY_URL=https://api.whissle.ai
+ARG VITE_CARTESIA_API_KEY
 
 WORKDIR /app
 
@@ -27,7 +29,7 @@ WORKDIR /app/examples/interview_coach
 COPY examples/interview_coach/package.json examples/interview_coach/package-lock.json ./
 RUN npm ci
 COPY examples/interview_coach/ ./
-RUN VITE_GATEWAY_URL=${VITE_GATEWAY_URL} npm run build
+RUN VITE_GATEWAY_URL=${VITE_GATEWAY_URL} VITE_CARTESIA_API_KEY=${VITE_CARTESIA_API_KEY} npm run build
 
 ## Stage 2: Serve with nginx
 FROM nginx:1.27-alpine

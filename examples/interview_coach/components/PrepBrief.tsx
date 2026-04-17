@@ -34,7 +34,7 @@ export default function PrepBrief({ config, onDone, onSkip, onBack }: Props) {
 
       let fullText = "";
       let chunkCount = 0;
-      const stream = streamAgentChat(config.agentUrl, messages, abort.signal);
+      const stream = streamAgentChat(config.agentUrl, messages, abort.signal, { max_tokens: 4096, temperature: 0.3 });
       for await (const token of stream) {
         if (abort.signal.aborted) return;
         if (typeof token === "string") {

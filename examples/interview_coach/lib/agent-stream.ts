@@ -8,6 +8,12 @@ export interface ChatMessage {
   tool_calls?: ToolCallResult[];
 }
 
+export interface StreamOptions {
+  tools?: ToolDefinition[];
+  max_tokens?: number;
+  temperature?: number;
+}
+
 /**
  * Stream a chat completion from the voice-agent server endpoint.
  * Yields text strings and ToolCallResult objects as they arrive via SSE.
@@ -16,13 +22,24 @@ export async function* streamAgentChat(
   agentUrl: string,
   messages: ChatMessage[],
   signal?: AbortSignal,
-  tools?: ToolDefinition[],
+  toolsOrOpts?: ToolDefinition[] | StreamOptions,
 ): AsyncGenerator<string | ToolCallResult, void, undefined> {
   const url = `${agentUrl.replace(/\/+$/, "")}/voice-agent/chat/stream`;
 
+  // Support both legacy (tools array) and new (options object) signatures
+  const opts: StreamOptions = Array.isArray(toolsOrOpts)
+    ? { tools: toolsOrOpts }
+    : toolsOrOpts ?? {};
+
   const body: Record<string, unknown> = { messages };
-  if (tools && tools.length > 0) {
-    body.tools = tools;
+  if (opts.tools && opts.tools.length > 0) {
+    body.tools = opts.tools;
+  }
+  if (opts.max_tokens) {
+    body.max_tokens = opts.max_tokens;
+  }
+  if (opts.temperature !== undefined) {
+    body.temperature = opts.temperature;
   }
 
   const res = await fetch(url, {

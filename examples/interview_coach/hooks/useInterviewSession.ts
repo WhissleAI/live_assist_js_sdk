@@ -9,7 +9,7 @@ import type { StreamTranscriptSegment } from "@whissle/live-assist-core";
 import { streamAgentChat } from "../lib/agent-stream";
 import type { ChatMessage } from "../lib/agent-stream";
 import type { ToolCallResult } from "../lib/roles";
-import { RimeTtsClient } from "../lib/rime-tts";
+import { CartesiaTtsClient } from "../lib/cartesia-tts";
 import { INTERVIEW_TOOLS, buildSystemPrompt } from "../lib/roles";
 import type { AnswerScore } from "../lib/scoring";
 import { computeDeliveryMetrics, identifyKeyMoments, generateBehavioralNarrative } from "../lib/scoring";
@@ -100,7 +100,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
 
   const asrRef = useRef<AsrStreamClient | null>(null);
   const micRef = useRef<SharedMicManager | null>(null);
-  const ttsRef = useRef<RimeTtsClient | null>(null);
+  const ttsRef = useRef<CartesiaTtsClient | null>(null);
   const profileRef = useRef(createBehavioralProfileManager());
   const messagesRef = useRef<ChatMessage[]>([]);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -573,7 +573,7 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
 
     let mic: SharedMicManager | null = null;
     let asr: AsrStreamClient | null = null;
-    let tts: RimeTtsClient | null = null;
+    let tts: CartesiaTtsClient | null = null;
 
     try {
       mic = new SharedMicManager();
@@ -581,13 +581,27 @@ export function useInterviewSession({ config, gapAnalysis, onAutoEnd }: UseInter
       asr.onTranscript = processSegment;
       asr.onError = (err) => setState((prev) => ({ ...prev, error: err.message }));
 
-      tts = new RimeTtsClient({ agentUrl: config.agentUrl, speaker: "cove" });
-      tts.onSpeakingChange = (speaking) => {
-        setState((prev) => ({ ...prev, isSpeaking: speaking }));
-        if (!speaking) agentDoneSpeakingRef.current = Date.now();
-      };
+      const cartesiaKey = (import.meta.env.VITE_CARTESIA_API_KEY as string) || "";
+      if (cartesiaKey) {
+        tts = new CartesiaTtsClient({
+          apiKey: cartesiaKey,
+          voiceId: "d46abd1d-2571-4e21-b3df-f4271cdb4f60", // Theo — friendly male
+        });
+        tts.onSpeakingChange = (speaking) => {
+          setState((prev) => ({ ...prev, isSpeaking: speaking }));
+          if (!speaking) agentDoneSpeakingRef.current = Date.now();
+        };
 
-      await tts.connect();
+        // TTS is optional — interview works text-only if connection fails
+        try {
+          await tts.connect();
+        } catch (ttsErr) {
+          console.warn("[InterviewSession] TTS unavailable, continuing text-only:", ttsErr);
+          tts.close();
+          tts = null;
+        }
+      }
+
       await mic.addConsumer("asr", (pcm) => asr!.sendPcm(pcm));
       await asr.connect();
 
